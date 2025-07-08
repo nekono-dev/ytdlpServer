@@ -11,4 +11,7 @@ COPY src/ .
 WORKDIR /download
 ENV TZ=Asia/Tokyo
 EXPOSE 5000
-ENTRYPOINT ["python3","-u","/workspace/main.py"]
+ENTRYPOINT [ \
+    "/bin/sh", "-c", \
+    "pip install --upgrade --break-system-packages --root-user-action ignore yt-dlp & python3 -u /workspace/main.py" \
+    ]
