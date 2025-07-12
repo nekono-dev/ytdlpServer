@@ -2,7 +2,9 @@
 
 ytdlp Sever is a API Endpoint for launch yt-dlp on your network.
 
-## tl;dr
+## Use with Docker-Compose
+
+### tl;dr
 
 Prepair Ubuntu Server and run here.
 
@@ -31,48 +33,9 @@ docker-compose up -d --scale worker=4
 
 Now you can download video by `curl -X POST "http://<Your Server IPaddr>:5000/ytdlp" -d "{\"url\": \"https://www.youtube.com/watch?v=XXXXXXXXXX\"}"`
 
-## Setup
+### Setup
 
-### Install Container engine
-
-<!-- #### Install and setup podman
-
-Install
-```sh
-sudo apt update
-sudo apt install podman
-```
-
-Setup user socket for podman.
-```sh
-systemctl --user enable --now podman.socket
-## find your Socket path
-SOCKET_PATH=`systemctl --user show podman.socket --no-pager | grep Listen | sed "s/\(Listen=\)\(.*\) .*/\2/"`
-## add Socket for environment
-echo "export DOCKER_HOST=unix://${SOCKET_PATH}" >> ~/.bashrc
-echo 'export DOCKER_BUILDKIT=0' >> ~/.bashrc
-. ~/.bashrc
-## add registry config to docker.io and quay.io
-cat << EOF | sudo tee -a /etc/containers/registries.conf
-unqualified-search-registries = ['docker.io', 'quay.io']
-EOF
-```
-
-Cannot resolve this problem
-```
->> docker-compose up -d
-[+] Running 3/4
- ⠿ Network ytdlpserver_default     Created                                                                                                                                                0.0s
- ⠿ Container ytdlpserver-redis-1   Starting                                                                                                                                               0.2s
- ⠿ Container ytdlpserver-worker-1  Created                                                                                                                                                0.1s
- ⠿ Container ytdlpserver-api-1     Created                                                                                                                                                0.1s
-Error response from daemon: error configuring network namespace for container 9b1b4da7665280232cbadcbdc268ab3e821e277b7521e48971d6d8ec31cac79c: CNI network "ytdlpserver_default" not found
-```
-
-Fail to create CNI and not work external endpoint.
--->
-
-#### Install and setup docker
+#### Install docker
 
 docker.io may charge a fee in the future.
 
@@ -85,7 +48,7 @@ newgrp docker
 sudo reboot
 ```
 
-### Install docker compose
+#### Install docker compose
 
 Launch in ubuntu 22.04 LTS.
 
@@ -102,6 +65,49 @@ ubuntu@devsv:~/git/ytdlpServer
 >> docker-compose --version
 Docker Compose version v2.4.1
 ```
+
+### Build container
+
+Build container image.
+
+```sh
+docker-compose build
+```
+
+Attention: Very long to build, wait a moment.
+
+<!--
+
+## Use with Podman
+
+### Setup
+
+#### Install Podman
+
+Install Podman
+
+```sh
+sudo apt update
+sudo apt install podman
+```
+#### Build Image
+
+```sh
+podman build -f ./Dockerfile.api -t ytdlpsrv-api:2025-07-12
+podman build -f ./Dockerfile.worker -t ytdlpsrv-worker:2025-07-12
+```
+
+
+```sh
+podman pod create -p 5000:5000  --name ytdlpsrv
+podman run -d --pod ytdlpsrv --name redis docker.io/library/redis
+podman run -dt --pod ytdlpsrv --privileged -e RQ_REDIS_URL=redis://redis --name api localhost/ytdlpsrv-api:2025-07-12
+podman run -dt --pod ytdlpsrv -e RQ_REDIS_URL=redis://redis --name worker -v /mnt/video/:/download --workdir /download localhost/ytdlpsrv-worker:2025-07-12
+```
+
+-->
+
+## How to use
 
 ### Install cifs for mount Windows Directory
 
@@ -122,7 +128,7 @@ if you need not hide your credential, you can setup `fstab` with hardcode creden
 ex. mount `¥¥192.168.3.120¥Videos`, user name is `samba`, password is `samba`. add that to `/etc/fstab`
 
 ```conf
-//192.168.3.120/Videos   /mnt/video   cifs  nofail,_netdev,x-systemd.automount,user=samba,password=samba,file_mode=0664,dir_mode=0775  0  0
+//192.168.3.120/Videos   /mnt/video   cifs  nofail,_netdev,x-systemd.automount,user=samba,password=samba,file_mode=0666,dir_mode=0777  0  0
 ```
 
 If not, create samba credential directory and credential file for connect windows share directory.
@@ -145,7 +151,7 @@ Edit `/etc/fstab` for mount on startup.
 ex. mount `¥¥192.168.3.120¥Videos` add...
 
 ```conf
-//192.168.3.120/Videos   /mnt/video   cifs  nofail,_netdev,x-systemd.automount,credentials=/etc/smb-credentials/.pw,file_mode=0664,dir_mode=0775  0  0
+//192.168.3.120/Videos   /mnt/video   cifs  nofail,_netdev,x-systemd.automount,credentials=/etc/smb-credentials/.pw,file_mode=0666,dir_mode=0777  0  0
 ```
 
 Try mount directory.
@@ -153,37 +159,10 @@ Try mount directory.
 ```sh
 sudo mount -a
 ```
+### Lauch Container
 
-## Build / Install
 
-### Install as container
-
-Build container image.
-
-```sh
-docker-compose build
-```
-
-Attention: Very long to build, wait a moment.
-
-<!-- ### Install as exec // not verified
-
-launch nuitka3 and get exe.
-
-Install python3.11 (not 3.12, nuitka3 not support yet) on your machine.
-
-ex: Git-bash (host install python3)
-
-```sh
-pip install -r requirements.txt
-nuitka3 --standalone ./main.py
-```
-
-generete `main.exe` and launch. -->
-
-## Launch
-
-### Launch as container
+#### Docker-compose
 
 Edit `docker-compose.yml` set your directory to `volumes` for download.
 
@@ -209,12 +188,7 @@ docker-compose up -d --scale worker=4
 docker-compose logs -f
 ```
 
-<!-- ### Launch as exe // not verified
-
-1. Put exe `Downloads` dir.
-2. Launch app. -->
-
-## How to use
+### Post Request
 
 1. send request like:
 
