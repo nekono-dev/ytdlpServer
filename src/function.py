@@ -11,16 +11,16 @@ def download(url: str, param: dict, myparam: dict) -> None:
     param["noplaylist"] = True
     param["overwrites"] = True
     param["outtmpl"] = str(get_title(url=url) + ".%(ext)s")
-    param["writethumbnail"] = "true"
+    # param["writethumbnail"] = "true"
     param["extractor_retries"] = 10
     param["retries"] = 10
     param["wait_for_video"] = [3, 60]
-    param["postprocessors"] = [
-        {
-            "key": "EmbedThumbnail",
-            "already_have_thumbnail": False,
-        },
-    ]
+    # param["postprocessors"] = [
+    #     {
+    #         "key": "EmbedThumbnail",
+    #         "already_have_thumbnail": False,
+    #     },
+    # ]
     if not myparam["origts"]:
         param["progress_hooks"] = [update_ts]
 
