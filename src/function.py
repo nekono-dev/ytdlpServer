@@ -1,5 +1,6 @@
 # https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/YoutubeDL.py
 import os
+import unicodedata
 from pathlib import Path
 
 from yt_dlp import YoutubeDL
@@ -18,9 +19,11 @@ def download(url: str, param: dict, myparam: dict) -> None:
         param["progress_hooks"] = [update_ts]
 
     if myparam["category"]:
-        subpath = Path(myparam["category"])
+        ## Mac対応
+        subpath = Path(unicodedata.normalize("NFC", str(myparam["category"])))
         Path.mkdir(subpath, exist_ok=True)
-        param["outtmpl"] = str(subpath.joinpath(param["outtmpl"]))
+        filename = unicodedata.normalize("NFC", str(subpath.joinpath(param["outtmpl"])))
+        param["outtmpl"] = filename
 
     with YoutubeDL(param) as ydl:
         ydl.download(url)
