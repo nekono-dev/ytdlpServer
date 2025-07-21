@@ -27,8 +27,10 @@ class ParameterError(Exception):
 @app.route("/ytdlp", methods=["POST"])
 def endpoint() -> tuple[Response, int]:
     try:
+        ## リクエストを処理
         form = request.json
         url = form.get("url")
+        category = form.get("category")
         lang = "ja" if form.get("language") is None else form.get("language")
         fmt = (
             "bestvideo*+bestaudio/best"
@@ -56,19 +58,14 @@ def endpoint() -> tuple[Response, int]:
                         "Accept-Language": lang + ",*;q=0.5",
                     },
                 },
-                {
-                    "origts": origts,
-                },
+                {"origts": origts, "category": category},
             ),
         )
 
         ## レスポンス
         result_response = (
             jsonify(
-                {
-                    "url": url,
-                    "format": fmt,
-                },
+                {"url": url, "format": fmt, "category": category},
             ),
             200,
         )
