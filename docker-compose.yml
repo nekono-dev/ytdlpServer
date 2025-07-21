@@ -24,6 +24,6 @@ services:
     environment:
       RQ_REDIS_URL: redis://redis
     volumes:
-      - /mnt:/download
+      - /mnt/video:/download
     working_dir: /download
     restart: always
