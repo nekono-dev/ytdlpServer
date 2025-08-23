@@ -19,6 +19,7 @@ Customise to your environment.
 
 ```sh
 sudo mkdir -p /mnt/video
+## if samba
 sudo tee -a "//<your windows ipaddr>/<your sharing path>   /mnt/video   cifs  nofail,_netdev,x-systemd.automount,user=<your username>,password=<your password>,file_mode=0666,dir_mode=0777  0  0" /etc/fstab
 sudo mount -a
 ```
@@ -66,9 +67,9 @@ ubuntu@devsv:~/git/ytdlpServer
 Docker Compose version v2.4.1
 ```
 
-### Install cifs for mount Windows Directory
+### (Optional) Install cifs for mount Windows Directory
 
-Install for mount windows samba share directory.
+Install for mount windows samba share directory if you need.
 
 ```sh
 sudo apt install cifs-utils
@@ -168,18 +169,21 @@ docker-compose logs -f
 2. wait a minute and will generate video to your directory.
 
 To make it easy, I recommend create iOS Shortcut like that...
+
 <details><summary>image</summary>
 
 ![iOS Shortcut example](.github/images/image.png)
+
 </details>
 
 Or use it with edit: [video-dl.shortcut](./video-dl.shortcut)
 
 ## API option
 
-| option   | description                                                                   |
-| -------- | ----------------------------------------------------------------------------- |
-| url      | video URL, input of yt-dlp                                                    |
-| format   | format setting, input of yt-dlp.                                              |
-| origts   | if this parameter defined, do not update creation timestamp to download date. |
-| category | save video with create directory if set.                                      |
+| option   | type    | description                                                                   |
+| -------- | ------- | ----------------------------------------------------------------------------- |
+| url      | string  | video URL, input of yt-dlp                                                    |
+| format   | string  | format setting, input of yt-dlp.                                              |
+| origts   | boolean | if this parameter defined, do not update creation timestamp to download date. |
+| category | string  | put video to sub-directory. create dir if not exist .                         |
+| language | string  | language setting for dubbed video, defalut "ja"                               |

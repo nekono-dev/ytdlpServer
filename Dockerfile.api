@@ -9,7 +9,6 @@ COPY requirements.txt .
 RUN pip3 install --break-system-packages --no-cache --upgrade -r requirements.txt
 COPY src/ .
 WORKDIR /download
-ENV TZ=Asia/Tokyo
 EXPOSE 5000
 ENTRYPOINT [ \
     "/bin/sh", "-c", \

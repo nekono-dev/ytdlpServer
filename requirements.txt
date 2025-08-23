@@ -5,3 +5,4 @@ rq==2.1.0
 redis==5.2.1
 mutagen==1.47.0
 pathlib~=1.0
+urllib3==2.0.6

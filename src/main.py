@@ -38,7 +38,7 @@ def endpoint() -> tuple[Response, int]:
             else form.get("format")
         )
         ## 指定された場合はタイムスタンプ更新をしない
-        origts = form.get("origts") is not None
+        origts = form.get("origts") is not None and form.get("origts") is True
 
         print("INFO: url =", url, "/ format =", fmt)
 
