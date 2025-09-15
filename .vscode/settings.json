@@ -6,10 +6,5 @@
     "editor.defaultFormatter": "charliermarsh.ruff"
   },
   "editor.defaultFormatter": "esbenp.prettier-vscode",
-  "[dockerfile]": {
-    "editor.defaultFormatter": "ms-azuretools.vscode-docker"
-  },
-  "[dockercompose]": {
-    "editor.defaultFormatter": "ms-azuretools.vscode-docker"
-  }
+  "python.defaultInterpreterPath": ".pyenv/versions/ytdlpServer/bin/python"
 }
