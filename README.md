@@ -4,7 +4,7 @@ ytdlp Sever is a API Endpoint for launch yt-dlp on your network.
 
 ## tl;dr
 
-Prepair Ubuntu Server and run here.
+Ubuntuサーバを用意して、以下を実行
 
 ```sh
 sudo apt update
@@ -15,7 +15,8 @@ sudo curl -SL https://github.com/docker/compose/releases/download/v2.4.1/docker-
 sudo chmod +x /usr/local/bin/docker-compose
 ```
 
-Customise to your environment.
+docker-compose.yamlの`volumes`のディレクトリをカスタマイズする。
+以下はsamba共有ディレクトリを`/mnt/video`に設定する例
 
 ```sh
 sudo mkdir -p /mnt/video
@@ -24,13 +25,57 @@ sudo tee -a "//<your windows ipaddr>/<your sharing path>   /mnt/video   cifs  no
 sudo mount -a
 ```
 
-Start Service.
+サーバを起動する。
 
 ```sh
 docker-compose up -d --scale worker=4
 ```
 
-Now you can download video by `curl -X POST "http://<Your Server IPaddr>:5000/ytdlp" -d "{\"url\": \"https://www.youtube.com/watch?v=XXXXXXXXXX\"}"`
+起動後、`http://<Your Server IPaddr>:5000/ytdlp`に対してPOSTリクエストを送ると、設定したディレクトリに動画がダウンロードできる。
+
+## サーバの使い方
+
+APIサーバに、以下のような POSTリクエストを送信する。
+
+   ```sh
+   curl -H "Content-Type: application/json" -X POST "http://localhost:5000/ytdlp" -d "{\"url\": "https://www.youtube.com/watch?v=XXXXXXXXXX", \"options\": \"--format bv*+ba/best\", \"savedir\": \"unsorted\"}
+   ```
+
+iOSショートカットなどを作成すると楽に操作できる。
+
+<details><summary>image</summary>
+
+![iOS Shortcut example](.github/images/image.png)
+
+</details>
+
+## API option
+
+| option  | type   | description                                            |
+| ------- | ------ | ------------------------------------------------------ |
+| url     | string | yt-dlp でダウンロードする動画URL                       |
+| options | string | yt-dlp コマンドラインに利用するオプション              |
+| savedir | string | 指定した場合、サブディレクトリを作成して動画を保存する |
+
+## オプションのヒント
+
+すべてのオプションはyt-dlpのオプションに準じる。よくある設定は以下。
+
+- Youtubeの動画音声がローカライズされない:
+  - `extractor-args` に `youtube:lang=ja` などを設定する。
+  - 備考: https://github.com/yt-dlp/yt-dlp/issues/387#issuecomment-1195182084
+
+- ファイル名が文字化けする
+  - `--windows-filenames`オプションを付与する
+
+- ログインが必要
+  - `-u <ユーザ名> -p <パスワード>`オプションを付与する。
+
+- フォーマットが意図通りにならない（webbmなど）
+  - `--merge-output-format mp4`などで固定する
+
+- 再ダウンロード（同ディレクトリへ同じファイルをダウンロード）できない
+  - `--force-overwrites`を設定する
 
 ## Setup
 
@@ -138,15 +183,15 @@ Edit `docker-compose.yml` set your directory to `volumes` for download.
 
 ```yml
 worker:
-  build:
-    dockerfile: ./Dockerfile.worker
+  build: ./workerServer
   depends_on:
     - redis
   environment:
-    RQ_REDIS_URL: redis://redis
+    REDIS_URL: redis://redis
   volumes:
     - /mnt/video:/download
   working_dir: /download
+  restart: always
 ```
 
 Lauch container with mounting download path.
@@ -157,33 +202,3 @@ docker-compose up -d --scale worker=4
 ## show log
 docker-compose logs -f
 ```
-
-## How to use
-
-1. send request like:
-
-   ```sh
-   curl -X POST "http://localhost:5000/ytdlp" -d "{\"url\": "https://www.youtube.com/watch?v=XXXXXXXXXX", \"format\": \"bv*+ba/best\"}
-   ```
-
-2. wait a minute and will generate video to your directory.
-
-To make it easy, I recommend create iOS Shortcut like that...
-
-<details><summary>image</summary>
-
-![iOS Shortcut example](.github/images/image.png)
-
-</details>
-
-Or use it with edit: [video-dl.shortcut](./video-dl.shortcut)
-
-## API option
-
-| option   | type    | description                                                                   |
-| -------- | ------- | ----------------------------------------------------------------------------- |
-| url      | string  | video URL, input of yt-dlp                                                    |
-| format   | string  | format setting, input of yt-dlp.                                              |
-| origts   | boolean | if this parameter defined, do not update creation timestamp to download date. |
-| category | string  | put video to sub-directory. create dir if not exist .                         |
-| language | string  | language setting for dubbed video, defalut "ja"                               |

@@ -1,8 +1,0 @@
-yt-dlp[curl_cffi]
-flask==3.1.0
-waitress==3.0.2
-rq==2.1.0
-redis==5.2.1
-mutagen==1.47.0
-pathlib~=1.0
-urllib3==2.0.6
