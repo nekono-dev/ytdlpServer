@@ -4,13 +4,6 @@ services:
   redis:
     image: redis
     restart: always
-  redis-insight:
-    image: redislabs/redisinsight:latest
-    ports:
-      - 5540:5540
-    restart: always
-    depends_on:
-      - redis
   api:
     build: ./apiServer
     depends_on:
@@ -26,7 +19,17 @@ services:
       - redis
     environment:
       REDIS_URL: redis://redis
+      REDIS_TTL: 604800
     volumes:
-      - /mnt/video:/download
+      - /mnt:/download
     working_dir: /download
     restart: always
+  redis-insight:
+    image: redislabs/redisinsight:latest
+    ports:
+      - 5540:5540
+    restart: always
+    depends_on:
+      - redis
+      - api
+      - worker

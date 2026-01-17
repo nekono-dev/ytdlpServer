@@ -15,6 +15,7 @@ REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 QUEUE_KEY = "ytdlp:queue"
 JOBS_PREFIX = "ytdlp:job:"
 BRPOP_TIMEOUT = int(os.environ.get("BRPOP_TIMEOUT", "5"))
+REDIS_TTL = int(os.environ.get("REDIS_TTL", str(7 * 24 * 60 * 60)))
 
 redis_message="Redis client not initialized"
 
@@ -43,6 +44,10 @@ def make_job_hash(job_id: str, job: dict[str, Any]) -> str:
         "fail_count": "0",
     }
     redis_client.hset(key, mapping=mapping)
+    try:
+        redis_client.expire(key, REDIS_TTL)
+    except Exception:
+        print("WARN: Failed to set TTL for", key)
     return key
 
 
@@ -54,8 +59,6 @@ def update_status(key: str, status: str, extra: dict[str, Any] | None = None) ->
         for k, v in extra.items():
             mapping[k] = str(v)
     redis_client.hset(key, mapping=mapping)
-
-
 
 
 def handle_job(raw: str) -> None:
