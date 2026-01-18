@@ -20,8 +20,10 @@ services:
     environment:
       REDIS_URL: redis://redis
       REDIS_TTL: 604800
+      RETRY_COUNT: 3
     volumes:
       - /mnt:/download
+      - /tmp/ytdlp:/tmp/ytdlp
     working_dir: /download
     restart: always
   redis-insight:
@@ -29,7 +31,11 @@ services:
     ports:
       - 5540:5540
     restart: always
+    volumes:
+      - redisinsight:/data
     depends_on:
       - redis
       - api
       - worker
+volumes:
+  redisinsight:

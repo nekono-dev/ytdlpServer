@@ -1,3 +1,8 @@
+# Python install
+
+```sh
+pyenv virtualenv 3.12.11 ytdlpServer
+```
 
 # Redis
 

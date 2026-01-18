@@ -51,6 +51,7 @@ def probe_and_build_jobs(url: str, options: list, savedir: str | None) -> list[d
             extractor = entry.get("ie_key") or entry.get("extractor")
 
             job: dict = {"options": options, "savedir": savedir}
+            job["filename"] = entry.get("title")
             if isinstance(target_url, str) and target_url.strip():
                 job["url"] = target_url
             else:
@@ -66,6 +67,12 @@ def probe_and_build_jobs(url: str, options: list, savedir: str | None) -> list[d
         target = None
         if isinstance(info, dict):
             target = info.get("webpage_url") or info.get("url")
+            # include filename when available
+            filename = info.get("title")
+            jobs.append({
+                "url": target or url,
+                "options": options, "savedir": savedir, "filename": filename})
+            return jobs
         if not target:
             target = url
         jobs.append({"url": target, "options": options, "savedir": savedir})

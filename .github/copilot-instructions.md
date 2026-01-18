@@ -42,7 +42,7 @@ yt-dlp -j --flat-playlist <URL>
   - url: string (必須) - ダウンロード対象のURL
   - options: string (任意) - yt-dlpに渡す追加オプション。`--best-video --best-audio`など、複数のオプションが1つの文字列として渡される。
   - savedir: string (任意) - 指定された場合はサブディレクトリを作成し、そこにダウンロードする。
-  
+
 ### 動作詳細
 
 送られたリクエストのURLパラメータに対して、以下相当の操作をpythonのytdlpモジュールで実行する。
@@ -77,8 +77,10 @@ yt-dlp -j --flat-playlist <URL>
 - url: string - ダウンロード対象のURL
 - options: string[]  (任意) - APIサーバから渡されたyt-dlpオプションを分解した配列形式。
 - savedir: string  (任意)
+- filename: string (任意) - ファイル名となる文字列（拡張子を除く）
 
-ジョブステータスキュー: "ytdlp:jobs:<job_id>"
+ジョブステータスキュー: "ytdlp:jobs:<status>:<job_id>"
+- job_id: string - ジョブの一意なID
 - status: string - ジョブの状態。`pending`, `in_progress`, `completed`, `failed`のいずれか。
 - url: string - ダウンロード対象のURL
 - options: string[]  (任意) - yt-dlpオプションの配列形式。
@@ -89,6 +91,8 @@ yt-dlp -j --flat-playlist <URL>
 - failed_at: timestamp  (任意) - ジョブ失敗時刻
 - error: string  (任意) - 失敗時のエラーメッセージ
 - failed_count: integer - 失敗回数
+
+ステータスキューのステータスがキーに入っているのは、ジョブ全体の見通しを良くするためである。
 
 ## ワーカーの仕様
 
