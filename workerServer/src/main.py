@@ -18,7 +18,7 @@ QUEUE_KEY = "ytdlp:queue"
 JOBS_PREFIX_BASE = "ytdlp:jobs"
 BRPOP_TIMEOUT = int(os.environ.get("BRPOP_TIMEOUT", "60"))
 REDIS_TTL = int(os.environ.get("REDIS_TTL", str(7 * 24 * 60 * 60)))
-RETRY_COUNT = int(os.environ.get("RETRY_COUNT", "3"))
+RETRY_COUNT = int(os.environ.get("RETRY_COUNT", "5"))
 
 redis_message="Redis client not initialized"
 

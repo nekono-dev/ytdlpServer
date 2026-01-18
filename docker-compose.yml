@@ -20,11 +20,9 @@ services:
     environment:
       REDIS_URL: redis://redis
       REDIS_TTL: 604800
-      RETRY_COUNT: 3
+      RETRY_COUNT: 5
     volumes:
       - /mnt:/download
-      - /tmp/ytdlp:/tmp/ytdlp
-    working_dir: /download
     restart: always
   redis-insight:
     image: redislabs/redisinsight:latest
