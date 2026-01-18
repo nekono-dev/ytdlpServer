@@ -1,12 +1,15 @@
 # https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/YoutubeDL.py
+import os
 import re
 import shutil
 import subprocess
+import time
 import unicodedata
 from pathlib import Path
 from typing import Any
 
 TMP_DIR = Path("/tmp/ytdlp")
+COPY_TIMEOUT = int(os.environ.get("COPY_TIMEOUT", "120"))
 
 def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
     url = job.get("url")
@@ -34,25 +37,44 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
         proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
         print("INFO: yt-dlp succeeded for:", url)
 
-        if isinstance(safe_name, str) and safe_name.strip():
-            for p in Path(TMP_DIR / subpath).rglob("*"):
-                if not p.is_file():
-                    continue
-                # match if provided filename is substring of the file name
-                if safe_name in p.name:
-                    dest = subpath / p.name
-                    if dest.exists():
-                        print("INFO: destination exists, skipping copy:", dest)
-                        Path.unlink(p)
-                        continue
-                    try:
-                        shutil.copy2(p, dest)
-                        print("INFO: copied from tmp:", p, "->", dest)
-                        Path.unlink(p)
-                    except Exception as e:
-                        print("ERROR: failed to move from tmp:", p, e)
+        if not isinstance(safe_name, str):
+            result = True, proc.stdout
 
-        result = True, proc.stdout
+        pattern = f"*{safe_name}*"
+        dlpath: Path = None
+        tmpfiledir = TMP_DIR / subpath
+        mvresult = False
+        for _ in range(COPY_TIMEOUT):
+            time.sleep(1)
+            if dlpath is None:
+                for p in Path(tmpfiledir).rglob(pattern):
+                    if not p.is_file():
+                        continue
+                    if p.suffix.lower() in {".part", ".ytdl"}:
+                        continue
+                    if safe_name in p.name:
+                        dlpath = p
+                        break
+                if dlpath is None:
+                    break
+            dest = subpath / dlpath.name
+            if dlpath.stat().st_size == 0:
+                continue
+
+            if dest.exists():
+                print("INFO: destination exists, skipping copy:", dest)
+                Path.unlink(p)
+                mvresult = True
+                break
+            try:
+                shutil.copy2(p, dest)
+                print("INFO: copied from tmp:", p, "->", dest)
+                Path.unlink(p)
+                mvresult = True
+            except Exception as e:
+                print("ERROR: failed to move from tmp:", p, e)
+
+        result = True and mvresult, proc.stdout
     except subprocess.CalledProcessError as e:
         print("ERROR: yt-dlp failed (rc=", e.returncode, "):", e.stderr)
         result = False, e.stderr or e.stdout or str(e)

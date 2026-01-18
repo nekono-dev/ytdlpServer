@@ -44,6 +44,7 @@ def make_job_hash(job_id: str, job: dict[str, Any]) -> str:
         "savedir": job.get("savedir") or "",
         "created_at": str(time.time()),
         "failed_count": "0",
+        "filename": job.get("filename") or "",
     }
     redis_client.hset(key, mapping=mapping)
     try:
