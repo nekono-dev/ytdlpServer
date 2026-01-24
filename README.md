@@ -4,18 +4,19 @@ ytdlp Sever is a API Endpoint for launch yt-dlp on your network.
 
 ## tl;dr
 
-Prepair Ubuntu Server and run here.
+Ubuntuサーバを用意して、以下を実行
 
 ```sh
 sudo apt update
 sudo apt install docker.io cifs-utils
 sudo gpasswd --add $USER docker
 newgrp docker
-sudo curl -SL https://github.com/docker/compose/releases/download/v2.4.1/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+sudo wget https://github.com/docker/compose/releases/download/v2.4.1/docker-compose-linux-x86_64 -P /usr/local/bin/docker-compose
 sudo chmod +x /usr/local/bin/docker-compose
 ```
 
-Customise to your environment.
+docker-compose.yamlの`volumes`のディレクトリをカスタマイズする。
+以下はsamba共有ディレクトリを`/mnt/video`に設定する例
 
 ```sh
 sudo mkdir -p /mnt/video
@@ -24,21 +25,67 @@ sudo tee -a "//<your windows ipaddr>/<your sharing path>   /mnt/video   cifs  no
 sudo mount -a
 ```
 
-Start Service.
+サーバを起動する。
 
 ```sh
 docker-compose up -d --scale worker=4
 ```
 
-Now you can download video by `curl -X POST "http://<Your Server IPaddr>:5000/ytdlp" -d "{\"url\": \"https://www.youtube.com/watch?v=XXXXXXXXXX\"}"`
+起動後、`http://<Your Server IPaddr>:5000/ytdlp`に対してPOSTリクエストを送ると、設定したディレクトリに動画がダウンロードできる。
 
-## Setup
+## サーバの使い方
 
-### Install Container engine
+APIサーバに、以下のような POSTリクエストを送信する。
 
-#### Install and setup docker
+   ```sh
+   curl -H "Content-Type: application/json" -X POST "http://localhost:5000/ytdlp" -d "{\"url\": "https://www.youtube.com/watch?v=XXXXXXXXXX", \"options\": \"--format bv*+ba/best\", \"savedir\": \"unsorted\"}
+   ```
 
-docker.io may charge a fee in the future.
+iOSショートカットなどを作成すると楽に操作できる。
+
+<details><summary>image</summary>
+
+![iOS Shortcut example](.github/images/image.png)
+
+</details>
+
+## API option
+
+| option  | type   | description                                            |
+| ------- | ------ | ------------------------------------------------------ |
+| url     | string | yt-dlp でダウンロードする動画URL                       |
+| options | string | yt-dlp コマンドラインに利用するオプション              |
+| savedir | string | 指定した場合、サブディレクトリを作成して動画を保存する |
+
+## オプションのヒント
+
+すべてのオプションはyt-dlpのオプションに準じる。よくある設定は以下。
+
+- Youtubeの動画音声がローカライズされない:
+  - `extractor-args` に `youtube:lang=ja` などを設定する。
+  - 備考: https://github.com/yt-dlp/yt-dlp/issues/387#issuecomment-1195182084
+
+- ファイル名が文字化けする
+  - `--windows-filenames`オプションを付与する
+
+- ログインが必要
+  - `-u <ユーザ名> -p <パスワード>`オプションを付与する。
+
+- フォーマットが意図通りにならない（webbmなど）
+  - `--merge-output-format mp4`などで固定する
+
+- 再ダウンロード（同ディレクトリへ同じファイルをダウンロード）できない
+  - `--force-overwrites`を設定する
+
+## セットアップ方法
+
+### 前提
+
+適当なLinuxサーバを構築し、アクセスできるようにしておく
+
+### Dockerのインストール
+
+ここではDockerをインストールしている
 
 ```sh
 sudo apt update
@@ -49,7 +96,9 @@ newgrp docker
 sudo reboot
 ```
 
-### Install docker compose
+### docker-composeのインストール
+
+コンテナを狭く起動するため、docker-composeをインストールする
 
 Launch in ubuntu 22.04 LTS.
 
@@ -67,90 +116,59 @@ ubuntu@devsv:~/git/ytdlpServer
 Docker Compose version v2.4.1
 ```
 
-### (Optional) Install cifs for mount Windows Directory
+### (任意) ダウンロード先ディレクトリをマウントする
 
-Install for mount windows samba share directory if you need.
+NASなどを利用している場合は、Sambaをマウントする
 
 ```sh
 sudo apt install cifs-utils
-```
-
-Create mout directory
-
-```sh
 sudo mkdir -p /mnt/video
 ```
 
-if you need not hide your credential, you can setup `fstab` with hardcode credential.
-
+Sambaの接続に認証が必要な場合、Linuxの`/etc/fstab`で以下のように設定できる
 ex. mount `¥¥192.168.3.120¥Videos`, user name is `samba`, password is `samba`. add that to `/etc/fstab`
 
 ```conf
 //192.168.3.120/Videos   /mnt/video   cifs  nofail,_netdev,x-systemd.automount,user=samba,password=samba,file_mode=0666,dir_mode=0777  0  0
 ```
-
-If not, create samba credential directory and credential file for connect windows share directory.
-
+または、credentialsを別ファイルで設定する
 ```sh
 sudo mkdir -p /etc/smb-credentials/
 cat << EOF | sudo tee /etc/smb-credentials/.pw
 username=user
 password=passwd
 EOF
-```
-
-...And prevent access all user except root.
-
-```sh
 sudo chmod +600 /etc/smb-credentials/.pw
-```
-
-Edit `/etc/fstab` for mount on startup.  
-ex. mount `¥¥192.168.3.120¥Videos` add...
-
-```conf
+## edit /etc/fstab
 //192.168.3.120/Videos   /mnt/video   cifs  nofail,_netdev,x-systemd.automount,credentials=/etc/smb-credentials/.pw,file_mode=0666,dir_mode=0777  0  0
 ```
 
-Try mount directory.
-
+/etc/fstabを作成したら、マウント操作を行う
 ```sh
 sudo mount -a
 ```
 
-## Build / Install
+## コンテナのビルド
 
-### Install as container
-
-Build container image.
-
+docker-composeで以下でビルドを行う
 ```sh
 docker-compose build
 ```
 
-Attention: Very long to build, wait a moment.
+## 実行
 
-## Launch
+`docker-compose.yml`の`volumes`に動画のダウンロード先を記載する。
+docker-composeにおいては`<ホスト側>:<コンテナ側>`で設定する。
 
-### Launch as container
-
-Edit `docker-compose.yml` set your directory to `volumes` for download.
-
+以下はサーバの`/mnt/video`に動画をダウンロードする例
 ```yml
 worker:
-  build:
-    dockerfile: ./Dockerfile.worker
-  depends_on:
-    - redis
-  environment:
-    RQ_REDIS_URL: redis://redis
+  build: ./workerServer
+...
   volumes:
     - /mnt/video:/download
-  working_dir: /download
 ```
-
-Lauch container with mounting download path.
-
+ytdlp Serverを起動する。
 ```sh
 ## set scale of workers.
 docker-compose up -d --scale worker=4
@@ -158,32 +176,6 @@ docker-compose up -d --scale worker=4
 docker-compose logs -f
 ```
 
-## How to use
+## キューの確認
 
-1. send request like:
-
-   ```sh
-   curl -X POST "http://localhost:5000/ytdlp" -d "{\"url\": "https://www.youtube.com/watch?v=XXXXXXXXXX", \"format\": \"bv*+ba/best\"}
-   ```
-
-2. wait a minute and will generate video to your directory.
-
-To make it easy, I recommend create iOS Shortcut like that...
-
-<details><summary>image</summary>
-
-![iOS Shortcut example](.github/images/image.png)
-
-</details>
-
-Or use it with edit: [video-dl.shortcut](./video-dl.shortcut)
-
-## API option
-
-| option   | type    | description                                                                   |
-| -------- | ------- | ----------------------------------------------------------------------------- |
-| url      | string  | video URL, input of yt-dlp                                                    |
-| format   | string  | format setting, input of yt-dlp.                                              |
-| origts   | boolean | if this parameter defined, do not update creation timestamp to download date. |
-| category | string  | put video to sub-directory. create dir if not exist .                         |
-| language | string  | language setting for dubbed video, defalut "ja"                               |
+`http://<IPアドレス>:5540`にアクセスするとRedis Insightからキューを確認できる。

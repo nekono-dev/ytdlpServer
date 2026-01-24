@@ -1,29 +1,37 @@
-version: '3'
+version: "3"
 
 services:
   redis:
     image: redis
     restart: always
-
   api:
-    build:
-      dockerfile: ./Dockerfile.api
+    build: ./apiServer
     depends_on:
       - redis
     environment:
-      RQ_REDIS_URL: redis://redis
+      REDIS_URL: redis://redis
+      SERVER_TTL: 24
     ports:
       - 5000:5000
     restart: always
-
   worker:
-    build:
-      dockerfile: ./Dockerfile.worker
+    build: ./workerServer
     depends_on:
       - redis
     environment:
-      RQ_REDIS_URL: redis://redis
+      REDIS_URL: redis://redis
+      REDIS_TTL: 604800
+      RETRY_COUNT: 5
+      DOWNLOAD_DIR: /download
     volumes:
-      - /mnt/video:/download
-    working_dir: /download
+      - /mnt:/download
+    restart: always
+  redis-insight:
+    image: redislabs/redisinsight:latest
+    environment:
+      RI_REDIS_HOST: redis
+    ports:
+      - 5540:5540
+    depends_on:
+      - redis
     restart: always
