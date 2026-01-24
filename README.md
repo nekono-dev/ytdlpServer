@@ -31,14 +31,14 @@ sudo mount -a
 docker-compose up -d --scale worker=4
 ```
 
-起動後、`http://<Your Server IPaddr>:5000/ytdlp`に対してPOSTリクエストを送ると、設定したディレクトリに動画がダウンロードできる。
+起動後、`https://<Your Server IPaddr>/ytdlp`に対してPOSTリクエストを送ると、設定したディレクトリに動画がダウンロードできる。
 
 ## サーバの使い方
 
 APIサーバに、以下のような POSTリクエストを送信する。
 
    ```sh
-   curl -H "Content-Type: application/json" -X POST "http://localhost:5000/ytdlp" -d "{\"url\": "https://www.youtube.com/watch?v=XXXXXXXXXX", \"options\": \"--format bv*+ba/best\", \"savedir\": \"unsorted\"}
+   curl -H "Content-Type: application/json" -k -X POST "https://localhost/ytdlp" -d "{\"url\": "https://www.youtube.com/watch?v=XXXXXXXXXX", \"options\": \"--format bv*+ba/best\", \"savedir\": \"unsorted\"}
    ```
 
 iOSショートカットなどを作成すると楽に操作できる。
@@ -174,6 +174,28 @@ ytdlp Serverを起動する。
 docker-compose up -d --scale worker=4
 ## show log
 docker-compose logs -f
+```
+
+HTTPS対応が不要な場合はapiの穴を開け、nginxをコメントアウトする。
+```yaml
+  api:
+    build: ./apiServer
+    depends_on:
+      - redis
+    environment:
+      REDIS_URL: redis://redis
+      SERVER_TTL: 24
+    restart: always
+    ports:
+      - 5000:5000
+#   nginx:
+#     build: ./nginx
+#     depends_on:
+#       - api
+#     ports:
+#       - 80:80
+#       - 443:443
+#     restart: always
 ```
 
 ## キューの確認

@@ -11,8 +11,16 @@ services:
     environment:
       REDIS_URL: redis://redis
       SERVER_TTL: 24
+    restart: always
+    # ports:
+    #   - 5000:5000
+  nginx:
+    build: ./nginx
+    depends_on:
+      - api
     ports:
-      - 5000:5000
+      - 80:80
+      - 443:443
     restart: always
   worker:
     build: ./workerServer
