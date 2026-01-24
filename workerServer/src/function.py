@@ -12,6 +12,7 @@ TMP_DIR = Path("/tmpdownload")
 SAVEDIR = Path("/download")
 COPY_TIMEOUT = int(os.environ.get("COPY_TIMEOUT", "120"))
 VIDEO_EXTS = {"avi", "flv", "mkv", "mov", "mp4", "webm"}
+AUDIO_EXTS = {"aac", "alac", "flac", "m4a", "mp3", "opus", "vorbis", "wav"}
 
 def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
     url = job.get("url")
@@ -66,7 +67,7 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
                 suffixes = [s.lower().lstrip(".") for s in p.suffixes]
                 if not suffixes:
                     continue
-                if not any(s in VIDEO_EXTS for s in suffixes):
+                if not any(s in (VIDEO_EXTS | AUDIO_EXTS) for s in suffixes):
                     continue
                 dlpath = p
                 print("INFO: found downloaded file:", dlpath)
@@ -83,6 +84,7 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
             mvresult = True
             break
         try:
+            Path.mkdir(SAVEDIR / subpath , exist_ok=True)
             shutil.copy2(dlpath, dest)
             print("INFO: copied from tmp:", p, "->", dest)
             mvresult = True
