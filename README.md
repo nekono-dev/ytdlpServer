@@ -77,13 +77,15 @@ iOSショートカットなどを作成すると楽に操作できる。
 - 再ダウンロード（同ディレクトリへ同じファイルをダウンロード）できない
   - `--force-overwrites`を設定する
 
-## Setup
+## セットアップ方法
 
-### Install Container engine
+### 前提
 
-#### Install and setup docker
+適当なLinuxサーバを構築し、アクセスできるようにしておく
 
-docker.io may charge a fee in the future.
+### Dockerのインストール
+
+ここではDockerをインストールしている
 
 ```sh
 sudo apt update
@@ -94,7 +96,9 @@ newgrp docker
 sudo reboot
 ```
 
-### Install docker compose
+### docker-composeのインストール
+
+コンテナを狭く起動するため、docker-composeをインストールする
 
 Launch in ubuntu 22.04 LTS.
 
@@ -112,93 +116,66 @@ ubuntu@devsv:~/git/ytdlpServer
 Docker Compose version v2.4.1
 ```
 
-### (Optional) Install cifs for mount Windows Directory
+### (任意) ダウンロード先ディレクトリをマウントする
 
-Install for mount windows samba share directory if you need.
+NASなどを利用している場合は、Sambaをマウントする
 
 ```sh
 sudo apt install cifs-utils
-```
-
-Create mout directory
-
-```sh
 sudo mkdir -p /mnt/video
 ```
 
-if you need not hide your credential, you can setup `fstab` with hardcode credential.
-
+Sambaの接続に認証が必要な場合、Linuxの`/etc/fstab`で以下のように設定できる
 ex. mount `¥¥192.168.3.120¥Videos`, user name is `samba`, password is `samba`. add that to `/etc/fstab`
 
 ```conf
 //192.168.3.120/Videos   /mnt/video   cifs  nofail,_netdev,x-systemd.automount,user=samba,password=samba,file_mode=0666,dir_mode=0777  0  0
 ```
-
-If not, create samba credential directory and credential file for connect windows share directory.
-
+または、credentialsを別ファイルで設定する
 ```sh
 sudo mkdir -p /etc/smb-credentials/
 cat << EOF | sudo tee /etc/smb-credentials/.pw
 username=user
 password=passwd
 EOF
-```
-
-...And prevent access all user except root.
-
-```sh
 sudo chmod +600 /etc/smb-credentials/.pw
-```
-
-Edit `/etc/fstab` for mount on startup.  
-ex. mount `¥¥192.168.3.120¥Videos` add...
-
-```conf
+## edit /etc/fstab
 //192.168.3.120/Videos   /mnt/video   cifs  nofail,_netdev,x-systemd.automount,credentials=/etc/smb-credentials/.pw,file_mode=0666,dir_mode=0777  0  0
 ```
 
-Try mount directory.
-
+/etc/fstabを作成したら、マウント操作を行う
 ```sh
 sudo mount -a
 ```
 
-## Build / Install
+## コンテナのビルド
 
-### Install as container
-
-Build container image.
-
+docker-composeで以下でビルドを行う
 ```sh
 docker-compose build
 ```
 
-Attention: Very long to build, wait a moment.
+## 実行
 
-## Launch
+`docker-compose.yml`の`volumes`に動画のダウンロード先を記載する。
+docker-composeにおいては`<ホスト側>:<コンテナ側>`で設定する。
 
-### Launch as container
-
-Edit `docker-compose.yml` set your directory to `volumes` for download.
-
+以下はサーバの`/mnt/video`に動画をダウンロードする例
 ```yml
 worker:
   build: ./workerServer
-  depends_on:
-    - redis
-  environment:
-    REDIS_URL: redis://redis
+...
   volumes:
     - /mnt/video:/download
-  working_dir: /download
-  restart: always
 ```
-
-Lauch container with mounting download path.
-
+ytdlp Serverを起動する。
 ```sh
 ## set scale of workers.
 docker-compose up -d --scale worker=4
 ## show log
 docker-compose logs -f
 ```
+
+## キューの確認
+
+`http://<IPアドレス>:5540`にアクセスするとRedis Insightからキューを確認できる。

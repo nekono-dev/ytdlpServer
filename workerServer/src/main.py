@@ -229,3 +229,6 @@ if __name__ == "__main__":
         # Suppress full traceback on Ctrl-C; print concise message and exit
         print("INFO: KeyboardInterrupt received — shutting down worker gracefully")
         sys.exit(0)
+    except Exception:
+        sys.exit(0)
+

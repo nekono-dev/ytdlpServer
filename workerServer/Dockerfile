@@ -9,6 +9,7 @@ COPY requirements.txt .
 RUN pip3 install --break-system-packages --no-cache --upgrade -r requirements.txt
 COPY src/ .
 COPY entrypoint.sh .
-WORKDIR /tmpdownload
+RUN chmod +x /workspace/entrypoint.sh
 
-ENTRYPOINT [ "/bin/sh", "/workspace/entrypoint.sh" ]
+WORKDIR /tmpdownload
+ENTRYPOINT ["/workspace/entrypoint.sh"]

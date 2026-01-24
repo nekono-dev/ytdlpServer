@@ -13,15 +13,14 @@ docker run --name redis-ytdlp -p 6379:6379 -d --rm redis:8.4.0
 # Redis Insight(DB閲覧)
 
 ```sh
-docker run -d --name redisinsight -p 5540:5540 redis/redisinsight:latest
+docker run --rm -d --name redisinsight -p 5540:5540 redis/redisinsight:latest
 ```
 
 # API Server
 
 ```sh
-cd apiServer
 # build
-docker build . -t ytdlpserver-api
+docker build ./apiServer -t ytdlpserver-api
 # Run debug mode with redis
 docker run --rm --name ytdlp-api -p 5000:5000 -e DEBUG=true -e REDIS_URL=redis://$(hostname -I | awk '{print $1}'):6379 ytdlpserver-api:latest
 ```
@@ -36,9 +35,15 @@ INFO: Start ytdlpServer port: 5000
 # Worker Server
 
 ```sh
-cd workerServer
-docker build . -t ytdlpserver-worker
+# build
+docker build ./workerServer -t ytdlpserver-worker
 
 # Run debug mode with redis
 docker run --rm --name ytdlp-worker -v /mnt/video:/download -e REDIS_URL=redis://$(hostname -I | awk '{print $1}'):6379 ytdlpserver-worker:latest
+```
+
+## clear all
+```sh
+docker rm -f redis-ytdlp redisinsight ytdlp-api ytdlp-worker
+docker container prune
 ```

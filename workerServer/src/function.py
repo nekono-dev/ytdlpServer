@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 TMP_DIR = Path("/tmpdownload")
-SAVEDIR = Path("/download")
+SAVEDIR = Path(os.environ.get("DOWNLOAD_DIR", "/download"))
 COPY_TIMEOUT = int(os.environ.get("COPY_TIMEOUT", "120"))
 VIDEO_EXTS = {"avi", "flv", "mkv", "mov", "mp4", "webm"}
 AUDIO_EXTS = {"aac", "alac", "flac", "m4a", "mp3", "opus", "vorbis", "wav"}
