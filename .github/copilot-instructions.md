@@ -78,6 +78,7 @@ yt-dlp -j --flat-playlist <URL>
 - options: string[]  (任意) - APIサーバから渡されたyt-dlpオプションを分解した配列形式。
 - savedir: string  (任意)
 - filename: string (任意) - ファイル名となる文字列（拡張子を除く）
+- id: string - ジョブの一意なID
 
 ジョブステータスキュー: "ytdlp:jobs:<status>:<job_id>"
 - job_id: string - ジョブの一意なID
