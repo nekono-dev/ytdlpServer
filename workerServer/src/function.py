@@ -111,7 +111,11 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
 
         if dlpath.stat().st_size == 0:
             continue
-
+        
+        if dest.exists() and dlpath.stat().st_size <= dest.stat().st_size:
+            print("INFO: destination file exists and is larger; skipping copy:", dest)
+            mvresult = True
+            break
         try:
             Path.mkdir(SAVEDIR / subpath , exist_ok=True)
             shutil.copy2(dlpath, dest)

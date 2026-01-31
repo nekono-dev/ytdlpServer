@@ -7,7 +7,6 @@ import sys
 import threading
 import time
 import unicodedata
-from pathlib import Path
 
 import redis
 from flask import Flask, jsonify, request
