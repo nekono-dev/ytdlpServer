@@ -1,5 +1,6 @@
 # https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/YoutubeDL.py
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -13,6 +14,8 @@ COPY_TIMEOUT = int(os.environ.get("COPY_TIMEOUT", "120"))
 VIDEO_EXTS = {"avi", "flv", "mkv", "mov", "mp4", "webm"}
 AUDIO_EXTS = {"aac", "alac", "flac", "m4a", "mp3", "opus", "vorbis", "wav"}
 
+MAX_NAME_BYTES = 255
+
 def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
     url = job.get("url")
     options = job.get("options") or []
@@ -21,6 +24,15 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
     Path.mkdir(subpath, exist_ok=True)
 
     safe_name = job.get("filename")
+    safe_name = Path(unicodedata.normalize("NFC", safe_name)).name
+    safe_name = re.sub(r'[\\/¥:*?"<>|]',"_", safe_name)
+    safe_name = re.sub(r"\s+", " ", safe_name.replace("\u3000", " ")).strip()
+
+    if isinstance(safe_name, list):
+        safe_name = "".join(str(x) for x in safe_name)
+    safe_name = str(safe_name)
+
+    print("INFO: Filename: ", safe_name)
 
     # Prefer using job id as base filename for download to ensure deterministic names
     job_id = job.get("id")
@@ -43,6 +55,7 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
         print("ERROR: Unexpected error running yt-dlp:", e)
         return False, str(e)
 
+    time.sleep(1)
     pattern = f"*{job_id}*"
     dlpath: Path = None
     tmpfiledir = TMP_DIR / subpath
@@ -66,27 +79,44 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
         if dlpath is None:
             continue
 
-        dest_name = None
         ## Safenameが有効である場合は safename + 拡張子
         ## そうでない場合はそのままコピー
-        if isinstance(safe_name, str) and safe_name.strip():
-            dest_name = safe_name + dlpath.suffix
-            dest = SAVEDIR / subpath / dest_name
+        if safe_name is not None and safe_name != "":
+            # safe_name を文字列化し、ファイル名長制限(バイト単位)に収める
+            safe_base = str(safe_name)
+
+            suffix_bytes = len(dlpath.suffix.encode("utf-8"))
+            max_base_bytes = MAX_NAME_BYTES - suffix_bytes
+            # 省略記号を付与するためのバイト長を考慮して処理する
+            ellipsis = "..."
+
+            # 元の文字列を保持して、実際に切り詰めが発生したかを判定する
+            original = safe_base
+            # safe_base + ellipsis が max_base_bytes に収まるように末尾を削る
+            while len((safe_base + ellipsis).encode("utf-8")) > max_base_bytes and safe_base:
+                safe_base = safe_base[:-1]
+
+            # 切り詰めが発生していれば省略記号を付与する
+            if safe_base:
+                if len(original.encode("utf-8")) > len(safe_base.encode("utf-8")):
+                    safe_base = safe_base + ellipsis
+            else:
+                # 何も残らなかった場合はフォールバック
+                safe_base = "file"
+
+            dest = SAVEDIR / subpath / (safe_base + dlpath.suffix)
         else:
             dest = SAVEDIR / subpath / dlpath.name
 
         if dlpath.stat().st_size == 0:
             continue
 
-        if dest.exists() and dest.stat().st_size > 0:
-            print("INFO: destination exists, skipping copy:", dest)
-            mvresult = True
-            break
         try:
             Path.mkdir(SAVEDIR / subpath , exist_ok=True)
             shutil.copy2(dlpath, dest)
             print("INFO: copied from tmp:", p, "->", dest)
             mvresult = True
+            break
         except Exception as e:
             print("ERROR: failed to move from tmp:", dlpath, e)
 

@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
-import textwrap
-import unicodedata
-from pathlib import Path
+import uuid
 
 
 def probe_and_build_jobs(url: str, options: list, savedir: str | None) -> list[dict]:
@@ -45,43 +42,32 @@ def probe_and_build_jobs(url: str, options: list, savedir: str | None) -> list[d
 
     jobs: list[dict] = []
 
-    # If we have multiple parsed objects, treat each as an entry (playlist)
-    if len(objs) > 1:
-        for entry in objs:
-            if not isinstance(entry, dict):
-                continue
-            target_url = entry.get("webpage_url") or entry.get("url")
-            entry_id = entry.get("id")
-            extractor = entry.get("ie_key") or entry.get("extractor")
+    for entry in objs:
+        if not isinstance(entry, dict):
+            continue
+        target_url = entry.get("webpage_url") or entry.get("url")
+        if target_url is None:
+            print("WARN: No URL extracted. Use requested URL.")
+            target_url = url
 
-            job: dict = {"options": options, "savedir": savedir}
-            job["filename"] = entry.get("title")
-            if entry_id is not None:
-                job["id"] = entry_id
-            if isinstance(target_url, str) and target_url.strip():
-                job["url"] = target_url
-            else:
-                if extractor:
-                    job["extractor"] = extractor
-                job["source"] = url
+        entry_id = entry.get("id")
+        extractor = entry.get("ie_key") or entry.get("extractor")
 
-            jobs.append(job)
-    else:
-        info = objs[0] if objs else None
-        target = None
-        if isinstance(info, dict):
-            target = info.get("webpage_url") or info.get("url")
-            # include filename when available
-            provided_filename = info.get("title")
-            safe_name = Path(unicodedata.normalize("NFC", provided_filename)).name
-            safe_name = re.sub(r'[\\/¥:*?"<>|]',"_", safe_name)
-            safe_name = textwrap.wrap(safe_name, 200, max_lines=1)
-            jobs.append({
-                "url": target or url,
-                "options": options, "savedir": savedir, "filename": safe_name})
-            return jobs
-        if not target:
-            target = url
-        jobs.append({"url": target, "options": options, "savedir": savedir})
+        job: dict = {"options": options, "savedir": savedir}
+
+        job["filename"] = entry.get("title")
+
+        if entry_id is not None:
+            job["id"] = entry_id
+        else:
+            job["id"] = uuid.uuid4().hex
+        if isinstance(target_url, str) and target_url.strip():
+            job["url"] = target_url
+        else:
+            if extractor:
+                job["extractor"] = extractor
+            job["source"] = url
+
+        jobs.append(job)
 
     return jobs

@@ -4,7 +4,6 @@ import json
 import os
 import sys
 import time
-import uuid
 from typing import Any
 
 import redis
@@ -33,18 +32,31 @@ except Exception as e:
     # Exit immediately so orchestration can restart/update configuration
     sys.exit(1)
 
+
+def _to_str(v: Any) -> str:
+    """Convert common types to strings for safe Redis storage.
+
+    - `list`/`dict` -> JSON string
+    - `None` -> empty string
+    - others -> `str(v)`
+    """
+    if isinstance(v, (list, dict)):
+        return json.dumps(v, ensure_ascii=False)
+    return "" if v is None else str(v)
+
 def make_job_hash(job_id: str, job: dict[str, Any]) -> str:
     if redis_client is None:
         raise RuntimeError(redis_message)
     key = f"{JOBS_PREFIX_BASE}:pending:{job_id}"
+    # Ensure all stored hash values are strings. Lists/dicts are JSON-encoded.
     mapping = {
         "status": "pending",
-        "url": job.get("url", ""),
-        "options": json.dumps(job.get("options", []), ensure_ascii=False),
-        "savedir": job.get("savedir") or "",
-        "created_at": str(time.time()),
+        "url": _to_str(job.get("url", "")),
+        "options": _to_str(job.get("options", [])),
+        "savedir": _to_str(job.get("savedir") or ""),
+        "created_at": _to_str(time.time()),
         "failed_count": "0",
-        "filename": job.get("filename") or "",
+        "filename": _to_str(job.get("filename") or job_id),
     }
     redis_client.hset(key, mapping=mapping)
     try:
@@ -71,12 +83,13 @@ def update_status(key: str, status: str, extra: dict[str, Any] | None = None) ->
 
     new_key = f"{JOBS_PREFIX_BASE}:{status}:{job_id}"
 
+    # use module-level _to_str helper
     # If no migration is necessary (same key), just update fields
     if key == new_key:
-        mapping: dict[str, str] = {"status": status}
+        mapping: dict[str, str] = {"status": _to_str(status)}
         if extra:
             for k, v in extra.items():
-                mapping[k] = str(v)
+                mapping[k] = _to_str(v)
         redis_client.hset(key, mapping=mapping)
         try:
             redis_client.expire(key, REDIS_TTL)
@@ -90,12 +103,12 @@ def update_status(key: str, status: str, extra: dict[str, Any] | None = None) ->
     except Exception:
         existing = {}
 
-    # ensure existing fields are strings
-    mapping: dict[str, str] = {k: str(v) for k, v in existing.items()}
-    mapping["status"] = status
+    # ensure existing fields are strings (and JSON-encode lists/dicts)
+    mapping: dict[str, str] = {k: _to_str(v) for k, v in existing.items()}
+    mapping["status"] = _to_str(status)
     if extra:
         for k, v in extra.items():
-            mapping[k] = str(v)
+            mapping[k] = _to_str(v)
 
     redis_client.hset(new_key, mapping=mapping)
     try:
@@ -122,8 +135,10 @@ def handle_job(raw: str) -> None:
 
     # Prefer yt-dlp provided id if present; fallback to generated UUID
     jid = job.get("id")
-    job_id = str(jid) if jid is not None else uuid.uuid4().hex
-    key = make_job_hash(job_id, job)
+    if not isinstance(jid, str) or not jid.strip():
+        print("ERROR: Failed to get id")
+        return
+    key = make_job_hash(jid, job)
     # mark in_progress (update_status returns the new key)
     key = update_status(key, "in_progress", {"started_at": str(time.time())})
 
@@ -214,11 +229,11 @@ def main() -> int:
             print("INFO: Job from queue processed; exiting")
             return 0
 
-    except redis.RedisError:
-        print("ERROR: Redis error while acquiring job")
+    except redis.RedisError as e:
+        print("ERROR: Redis error while acquiring job: ", str(e))
         return 1
-    except Exception:
-        print("ERROR: Unexpected error in worker")
+    except Exception as e:
+        print("ERROR: Unexpected error in worker: ", str(e))
         return 1
 
     print("INFO: No job found in queue or retryable failed jobs; exiting")
