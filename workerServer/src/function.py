@@ -1,6 +1,5 @@
 # https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/YoutubeDL.py
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -21,16 +20,11 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
     subpath = Path(unicodedata.normalize("NFC", savedir))
     Path.mkdir(subpath, exist_ok=True)
 
-    provided_filename = job.get("filename")
-    safe_name = None
-    if isinstance(provided_filename, str) and provided_filename.strip():
-        safe_name = Path(unicodedata.normalize("NFC", provided_filename)).name
-        safe_name = re.sub(r'[\\/¥:*?"<>|]',"_", safe_name)
+    safe_name = job.get("filename")
 
-    if isinstance(safe_name, str) and safe_name.strip():
-        outtmpl = str(TMP_DIR / subpath / (safe_name + ".%(ext)s"))
-    else:
-        outtmpl = str(SAVEDIR / subpath / "%(title)s.%(ext)s")
+    # Prefer using job id as base filename for download to ensure deterministic names
+    job_id = job.get("id")
+    outtmpl = str(TMP_DIR / subpath / (str(job_id) + ".%(ext)s"))
 
     cmd = ["yt-dlp", "--no-progress", *options, "-o", outtmpl, "--no-playlist", url]
     print("INFO: Running yt-dlp:", " ".join(cmd))
@@ -49,10 +43,7 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
         print("ERROR: Unexpected error running yt-dlp:", e)
         return False, str(e)
 
-    if not isinstance(safe_name, str):
-        return True, proc.stdout
-
-    pattern = f"*{safe_name}*"
+    pattern = f"*{job_id}*"
     dlpath: Path = None
     tmpfiledir = TMP_DIR / subpath
     mvresult = False
@@ -62,8 +53,8 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
             for p in Path(tmpfiledir).rglob(pattern):
                 if not p.is_file():
                     continue
-                if safe_name not in p.name:
-                    continue
+                if str(job_id) not in p.name:
+                        continue
                 suffixes = [s.lower().lstrip(".") for s in p.suffixes]
                 if not suffixes:
                     continue
@@ -75,7 +66,15 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
         if dlpath is None:
             continue
 
-        dest = SAVEDIR / subpath / dlpath.name
+        dest_name = None
+        ## Safenameが有効である場合は safename + 拡張子
+        ## そうでない場合はそのままコピー
+        if isinstance(safe_name, str) and safe_name.strip():
+            dest_name = safe_name + dlpath.suffix
+            dest = SAVEDIR / subpath / dest_name
+        else:
+            dest = SAVEDIR / subpath / dlpath.name
+
         if dlpath.stat().st_size == 0:
             continue
 

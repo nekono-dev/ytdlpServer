@@ -33,6 +33,8 @@ services:
       DOWNLOAD_DIR: /download
     volumes:
       - /mnt:/download
+    tmpfs:
+      - /tmpdownload
     restart: always
   redis-insight:
     image: redislabs/redisinsight:latest

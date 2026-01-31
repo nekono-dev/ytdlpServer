@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
+import textwrap
+import unicodedata
+from pathlib import Path
 
 
 def probe_and_build_jobs(url: str, options: list, savedir: str | None) -> list[dict]:
@@ -52,11 +56,11 @@ def probe_and_build_jobs(url: str, options: list, savedir: str | None) -> list[d
 
             job: dict = {"options": options, "savedir": savedir}
             job["filename"] = entry.get("title")
+            if entry_id is not None:
+                job["id"] = entry_id
             if isinstance(target_url, str) and target_url.strip():
                 job["url"] = target_url
             else:
-                if entry_id is not None:
-                    job["id"] = entry_id
                 if extractor:
                     job["extractor"] = extractor
                 job["source"] = url
@@ -68,10 +72,13 @@ def probe_and_build_jobs(url: str, options: list, savedir: str | None) -> list[d
         if isinstance(info, dict):
             target = info.get("webpage_url") or info.get("url")
             # include filename when available
-            filename = info.get("title")
+            provided_filename = info.get("title")
+            safe_name = Path(unicodedata.normalize("NFC", provided_filename)).name
+            safe_name = re.sub(r'[\\/¥:*?"<>|]',"_", safe_name)
+            safe_name = textwrap.wrap(safe_name, 200, max_lines=1)
             jobs.append({
                 "url": target or url,
-                "options": options, "savedir": savedir, "filename": filename})
+                "options": options, "savedir": savedir, "filename": safe_name})
             return jobs
         if not target:
             target = url

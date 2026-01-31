@@ -120,7 +120,9 @@ def handle_job(raw: str) -> None:
         print("ERROR: Failed to parse job JSON:", raw)
         return
 
-    job_id = uuid.uuid4().hex
+    # Prefer yt-dlp provided id if present; fallback to generated UUID
+    jid = job.get("id")
+    job_id = str(jid) if jid is not None else uuid.uuid4().hex
     key = make_job_hash(job_id, job)
     # mark in_progress (update_status returns the new key)
     key = update_status(key, "in_progress", {"started_at": str(time.time())})
