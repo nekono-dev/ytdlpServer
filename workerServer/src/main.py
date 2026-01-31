@@ -7,7 +7,6 @@ import time
 from typing import Any
 
 import redis
-
 from function import run_yt_dlp
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
@@ -174,7 +173,7 @@ def find_retryable_failed_key() -> str | None:
     except Exception:
         # Fallback: no retryable key found or scan failed
         return None
-
+    print("INFO: Not found retryable failed job.")
     return None
 
 
@@ -196,6 +195,8 @@ def process_failed_key(key: str) -> None:
         "url": data.get("url", ""),
         "options": json.loads(data.get("options", "[]") or "[]"),
         "savedir": data.get("savedir", ""),
+        "filename": data.get("filename", ""),
+        "id": key.split(":")[-1],
     }
 
     ok, output = run_yt_dlp(job)
@@ -218,7 +219,7 @@ def main() -> int:
         if retry_key:
             print("INFO: Found retryable failed job:", retry_key)
             process_failed_key(retry_key)
-            print("INFO: Retried failed job; exiting")
+            print("INFO: Retried job processed; exiting")
             return 0
 
         item = redis_client.blpop(QUEUE_KEY, timeout=BRPOP_TIMEOUT)

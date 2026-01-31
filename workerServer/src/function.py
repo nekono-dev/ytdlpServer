@@ -24,13 +24,14 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
     Path.mkdir(subpath, exist_ok=True)
 
     safe_name = job.get("filename")
-    safe_name = Path(unicodedata.normalize("NFC", safe_name)).name
-    safe_name = re.sub(r'[\\/¥:*?"<>|]',"_", safe_name)
-    safe_name = re.sub(r"\s+", " ", safe_name.replace("\u3000", " ")).strip()
-
     if isinstance(safe_name, list):
         safe_name = "".join(str(x) for x in safe_name)
-    safe_name = str(safe_name)
+    # Ensure we never pass None into unicodedata.normalize
+    safe_name = str(safe_name or "")
+    safe_name = unicodedata.normalize("NFC", safe_name)
+    safe_name = Path(safe_name).name
+    safe_name = re.sub(r'[\\/¥:*?"<>|]', "_", safe_name)
+    safe_name = re.sub(r"\s+", " ", safe_name.replace("\u3000", " ")).strip()
 
     print("INFO: Filename: ", safe_name)
 
