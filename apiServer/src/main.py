@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
+import unicodedata
+from pathlib import Path
 
 import redis
 from flask import Flask, jsonify, request
@@ -46,6 +49,9 @@ def parse_request(form: dict) -> tuple[str, list, str | None]:
 
     url = form.get("url")
     savedir = form.get("savedir")
+    savedir = unicodedata.normalize("NFC", savedir)
+    savedir = re.sub(r'[\\/¥:*?"<>|]', "_", savedir)
+    savedir = re.sub(r"\s+", " ", savedir.replace("\u3000", "")).strip()
 
     # Validate url
     if not isinstance(url, str) or url.strip() == "":
