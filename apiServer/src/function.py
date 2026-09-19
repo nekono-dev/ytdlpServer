@@ -11,6 +11,41 @@ INVALID_FS_CHARS = re.compile(r'[\\/¥:*?"<>|]')
 TEMPLATE_PATTERN = re.compile(r"%\(([^)]+)\)s")
 MAX_JOB_ID_BYTES = 200
 
+# 子供向け動画などは既定クライアントだけでは取得できず "この動画はご覧いただけません" となる。
+# PO Token が必要な mweb クライアントを既定に追加して取得できるようにする。
+YOUTUBE_PLAYER_CLIENT = "player_client=default,mweb"
+YOUTUBE_ARGS_PATTERN = re.compile(r"^youtube:", re.IGNORECASE)
+
+
+def with_youtube_defaults(options: list[str]) -> list[str]:
+    """`--extractor-args youtube:...` に player_client の既定値を補って返す。
+
+    yt-dlp は同じ抽出器への --extractor-args を後勝ちで上書きするため、
+    設定ファイルではなく、ユーザ指定の youtube: 引数へ直接マージする。
+    ユーザが player_client を明示している場合はそれを尊重する。
+    """
+    result = list(options)
+    found = False
+    for i, opt in enumerate(result):
+        if opt == "--extractor-args" and i + 1 < len(result):
+            index, prefix, value = i + 1, "", result[i + 1]
+        elif opt.startswith("--extractor-args="):
+            index, prefix, value = i, "--extractor-args=", opt.split("=", 1)[1]
+        else:
+            continue
+
+        if not YOUTUBE_ARGS_PATTERN.match(value):
+            continue
+
+        found = True
+        if "player_client=" not in value:
+            result[index] = f"{prefix}{value.rstrip(';')};{YOUTUBE_PLAYER_CLIENT}"
+
+    if not found:
+        result += ["--extractor-args", f"youtube:{YOUTUBE_PLAYER_CLIENT}"]
+
+    return result
+
 
 def _sanitize_name(value: str) -> str:
     normalized = unicodedata.normalize("NFC", str(value))
@@ -56,7 +91,8 @@ def probe_and_build_jobs(
     The function does NOT push to Redis; it only returns job dicts of the form:
     {"url": <target_url>, "options": <options>, "savedir": <savedir>}.
     """
-    filtered_opts = [opt for opt in (options or []) if opt != "--no-playlist"]
+    filtered_opts = with_youtube_defaults(
+        [opt for opt in (options or []) if opt != "--no-playlist"])
 
     cmd = ["yt-dlp", "-j", "--no-progress", "--flat-playlist", *filtered_opts, url]
 

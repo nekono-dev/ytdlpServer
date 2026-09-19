@@ -65,6 +65,18 @@ iOSショートカットなどを作成すると楽に操作できる。
 - 同一リクエスト内で重複した場合は `-2`, `-3` の連番サフィックスを付与
 - テンプレート内に存在しないキーを指定した場合は `400` を返す
 
+## YouTubeの取得に関する構成
+
+YouTubeの一部動画（子供向け動画など）は、JavaScriptチャレンジの解決とPO Tokenがないと `この動画はご覧いただけません` となり取得できない。
+そのため以下の構成としている。
+
+- `nodejs`: yt-dlpがJSチャレンジを解くための実行環境（`/etc/yt-dlp.conf` の `--js-runtimes node`）。
+  - Alpine 3.21の`deno`(2.0.6)はyt-dlpから未サポート扱いとなるため使用しない。
+- `pot-provider`サービス（bgutil-ytdlp-pot-provider）: PO Tokenを生成する。api / worker の yt-dlp プラグインから利用される。
+- `player_client=default,mweb`: PO Tokenが使える`mweb`クライアントを既定に追加する。
+  - ユーザが `--extractor-args youtube:...` を指定した場合は、その引数に自動でマージされる。
+  - ユーザが `player_client=` を明示した場合はそれを優先する。
+
 ## オプションのヒント
 
 すべてのオプションはyt-dlpのオプションに準じる。よくある設定は以下。

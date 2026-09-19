@@ -4,6 +4,9 @@ services:
   redis:
     image: redis
     restart: always
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider
+    restart: always
   nginx:
     build: ./nginx
     depends_on:
@@ -15,6 +18,7 @@ services:
     build: ./apiServer
     depends_on:
       - redis
+      - pot-provider
     environment:
       REDIS_URL: redis://redis
       SERVER_TTL: 24
@@ -23,6 +27,7 @@ services:
     build: ./workerServer
     depends_on:
       - redis
+      - pot-provider
     environment:
       REDIS_URL: redis://redis
       REDIS_TTL: 604800
