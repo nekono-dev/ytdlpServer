@@ -1,0 +1,70 @@
+name: release-installer
+
+# ブランチ push: ローリング prerelease (installer-<branch>) に ref 固定版を添付
+# タグ push (v*): 通常の Release に添付
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+    paths:
+      - scripts/install-alpine.sh
+      - .github/workflows/release-installer.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 構文チェック
+        run: |
+          sh -n scripts/install-alpine.sh
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -s sh scripts/install-alpine.sh
+
+      - name: ref と cloudflared の版数・ハッシュを埋め込む
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          ref="${GITHUB_REF_NAME}"
+          # cloudflared の最新版を取得しバイナリの SHA256 を計算する
+          cf_ver="$(gh api repos/cloudflare/cloudflared/releases/latest --jq .tag_name)"
+          [ -n "$cf_ver" ]
+          for arch in amd64 arm64; do
+            curl -fsSL -o "cf-$arch" \
+              "https://github.com/cloudflare/cloudflared/releases/download/$cf_ver/cloudflared-linux-$arch"
+            eval "sha_$arch=$(sha256sum "cf-$arch" | cut -d' ' -f1)"
+          done
+          mkdir -p dist
+          sed \
+            -e "s|^REPO_REF_DEFAULT=.*|REPO_REF_DEFAULT=\"$ref\"|" \
+            -e "s|^CF_VERSION_DEFAULT=.*|CF_VERSION_DEFAULT=\"$cf_ver\"|" \
+            -e "s|^CF_SHA256_AMD64_DEFAULT=.*|CF_SHA256_AMD64_DEFAULT=\"$sha_amd64\"|" \
+            -e "s|^CF_SHA256_ARM64_DEFAULT=.*|CF_SHA256_ARM64_DEFAULT=\"$sha_arm64\"|" \
+            scripts/install-alpine.sh >dist/install-alpine.sh
+          sh -n dist/install-alpine.sh
+          grep -q "^REPO_REF_DEFAULT=\"$ref\"" dist/install-alpine.sh
+          grep -q "^CF_SHA256_AMD64_DEFAULT=\"[0-9a-f]\{64\}\"" dist/install-alpine.sh
+
+      - name: 公開
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+              gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+            gh release upload "$GITHUB_REF_NAME" dist/install-alpine.sh --clobber
+          else
+            # ブランチ名の / は - に変換する
+            tag="installer-$(echo "$GITHUB_REF_NAME" | tr '/' '-')"
+            gh release view "$tag" >/dev/null 2>&1 ||
+              gh release create "$tag" --prerelease --target "$GITHUB_SHA" \
+                --title "$tag" --notes "ブランチ $GITHUB_REF_NAME 用のインストーラ (自動更新)"
+            gh release upload "$tag" dist/install-alpine.sh --clobber
+          fi
