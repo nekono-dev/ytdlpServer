@@ -16,6 +16,10 @@ docker run --name redis-ytdlp -p 6379:6379 -d --rm redis:8.4.0
 docker run --rm -d --name redisinsight -p 5540:5540 redis/redisinsight:latest
 ```
 
+Alpine 向けインストーラー（`scripts/install-alpine.sh`）は、コンテナを使わずに Redis Insight を動かす。
+Redis Insight は SSPL のためビルド済みバイナリを再配布せず、公式 GitHub のタグのソースをインストール先でビルドする。
+手順は公式 Dockerfile と同じ（3.8.0 は yarn、それ以降の版は npm に移行済みのため `yarn.lock` の有無で分岐する）。
+
 # API Server
 
 ```sh

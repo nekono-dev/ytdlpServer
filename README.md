@@ -202,10 +202,14 @@ WORKER_COUNT=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
 | ----------------------- | ------------------------------------------------ | -------------------------------------------------- |
 | HTTPS（nginx）          | `WITH_NGINX=1`（証明書の CN は `SSL_CN=<ホスト名>`） | `https://<IPアドレス>/download`（自己署名証明書） |
 | Cloudflare Tunnel       | `WITH_CLOUDFLARED=1 CLOUDFLARE_TOKEN=<トークン>` | Cloudflare で設定したホスト名                      |
-| Redis の Web UI         | `WITH_REDIS_INSIGHT=1`                           | `http://127.0.0.1:5540`（redis-commander）         |
+| Redis の Web UI         | `WITH_REDIS_INSIGHT=1`                           | `http://<IPアドレス>:5540`（Redis Insight）        |
 
 - Cloudflare Tunnel は、Release から取得した `install-alpine.sh` でのみ使える。
 - Redis の Web UI はデフォルトで有効
+- Redis Insight は SSPL ライセンスのため、ビルド済みバイナリは配布しない。インストーラーが公式 GitHub のソース（`REDIS_INSIGHT_VERSION` のタグ、既定 `3.8.0`）を取得し、その場でビルドする
+  - 要件: メモリ 2GB 以上、Node.js 24 以上（Alpine 3.23 以降）、初回の所要時間は約 6 分（ビルド済みなら再実行時はスキップ）
+  - 要件を満たさない場合やビルドに失敗した場合は、警告を出して軽量な redis-commander で継続する
+  - `REDIS_UI=commander` を指定すると、最初から redis-commander を使う
 - Redis の Web UI を別のホストから見る場合は `REDIS_UI_HOST=0.0.0.0` を付ける（デフォルト値）
 
 例: HTTPS と Redis の Web UI を追加する。

@@ -15,6 +15,7 @@ REPO_REF_DEFAULT="main"
 CF_VERSION_DEFAULT="2025.8.1"
 CF_SHA256_AMD64_DEFAULT=""
 CF_SHA256_ARM64_DEFAULT=""
+RI_VERSION_DEFAULT="3.8.0"
 # -----------------------------------------------------------------------------
 
 CONF_FILE="/etc/conf.d/ytdlpserver"
@@ -41,9 +42,13 @@ usage() {
   SSL_CN            localhost     自己署名証明書の CN
   WITH_CLOUDFLARED  1 で cloudflared を導入 (CLOUDFLARE_TOKEN が必須)
   CLOUDFLARE_TOKEN  Cloudflare Tunnel のトークン
-  WITH_REDIS_INSIGHT 1 で redis-commander (Web UI, 5540) を導入
-                    ※公式 Redis Insight は Alpine で動作しないため代替
-  REDIS_UI_HOST     127.0.0.1     redis-commander の待ち受けアドレス
+  WITH_REDIS_INSIGHT 1 で Redis の Web UI (5540) を導入
+  REDIS_UI          insight       insight (Redis Insight) または commander (redis-commander)
+                    insight は公式ソースを取得して現地でビルドする (SSPL のため
+                    ビルド済みバイナリは配布しない)。要 メモリ 2GB / Node.js 24 以上 /
+                    所要 約 6 分。満たせない・失敗した場合は commander で継続する
+  REDIS_INSIGHT_VERSION 3.8.0     ビルドする Redis Insight のタグ
+  REDIS_UI_HOST     0.0.0.0       Web UI の待ち受けアドレス
 EOF
 }
 
@@ -68,7 +73,7 @@ die() {
 # 環境変数の指定を退避してから保存済みの設定を読み、指定があれば上書きする
 _ENV_KEYS="REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR TMP_DIR WORKER_COUNT API_PORT POT_PORT \
 SERVER_TTL REDIS_TTL RETRY_COUNT WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
-WITH_REDIS_INSIGHT REDIS_UI_HOST"
+WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION REDIS_UI_HOST"
 _saved=""
 for _k in $_ENV_KEYS; do
 	if eval "[ \"\${$_k+set}\" = set ]"; then
@@ -98,6 +103,8 @@ SSL_CN="${SSL_CN:-localhost}"
 WITH_CLOUDFLARED="${WITH_CLOUDFLARED:-0}"
 CLOUDFLARE_TOKEN="${CLOUDFLARE_TOKEN:-}"
 WITH_REDIS_INSIGHT="${WITH_REDIS_INSIGHT:-1}"
+REDIS_UI="${REDIS_UI:-insight}"
+REDIS_INSIGHT_VERSION="${REDIS_INSIGHT_VERSION:-$RI_VERSION_DEFAULT}"
 REDIS_UI_HOST="${REDIS_UI_HOST:-0.0.0.0}"
 
 # 数値の検証
@@ -110,6 +117,13 @@ done
 [ "$WORKER_COUNT" -ge 1 ] || die "WORKER_COUNT は 1 以上にしてください"
 # アプリ側で /tmpdownload 固定のため変更は不可
 [ "$TMP_DIR" = "/tmpdownload" ] || die "TMP_DIR はアプリ側で /tmpdownload に固定されています"
+case "$REDIS_UI" in
+insight | commander) ;;
+*) die "REDIS_UI は insight か commander を指定してください: $REDIS_UI" ;;
+esac
+case "$REDIS_INSIGHT_VERSION" in
+'' | *[!0-9A-Za-z._-]*) die "REDIS_INSIGHT_VERSION が不正です: $REDIS_INSIGHT_VERSION" ;;
+esac
 if [ "$WITH_CLOUDFLARED" = "1" ] && [ -z "$CLOUDFLARE_TOKEN" ]; then
 	die "WITH_CLOUDFLARED=1 には CLOUDFLARE_TOKEN が必要です"
 fi
@@ -118,6 +132,8 @@ SRC_DIR="$INSTALL_DIR/src"
 VENV_DIR="$INSTALL_DIR/venv"
 POT_DIR="$INSTALL_DIR/pot-provider"
 BIN_DIR="$INSTALL_DIR/bin"
+RI_DIR="$INSTALL_DIR/redisinsight"
+RI_DATA_DIR="/var/lib/redisinsight"
 
 # ---- 設定ファイルの保存 -----------------------------------------------------
 # 値はシングルクォートで囲み、sh から . で読み込める形にする
@@ -130,7 +146,7 @@ write_conf() {
 		echo "# ytdlpserver の設定 (install-alpine.sh が生成)。編集後は再起動すること。"
 		for _k in REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR TMP_DIR WORKER_COUNT API_PORT POT_PORT \
 			SERVER_TTL REDIS_TTL RETRY_COUNT WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
-			WITH_REDIS_INSIGHT REDIS_UI_HOST; do
+			WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION REDIS_UI_HOST; do
 			eval "_v=\$$_k"
 			echo "$_k=$(q "$_v")"
 		done
@@ -379,8 +395,8 @@ EOF
 	enable_and_restart ytdlp-cloudflared
 }
 
-# ---- オプション: redis-commander (Redis Insight の代替) ---------------------
-setup_redis_ui() {
+# ---- オプション: redis-commander -------------------------------------------
+setup_redis_commander() {
 	log "redis-commander を設定します"
 	npm install -g --no-audit --no-fund redis-commander
 	cat >"$BIN_DIR/run-redis-ui" <<EOF
@@ -391,6 +407,103 @@ EOF
 	chmod 755 "$BIN_DIR/run-redis-ui"
 	write_initd ytdlp-redis-ui "redis-commander (Redis Web UI)" "$BIN_DIR/run-redis-ui" "need redis"
 	enable_and_restart ytdlp-redis-ui
+}
+
+# ---- オプション: Redis Insight (公式ソースから現地ビルド) --------------------
+# sass-embedded の glibc 向けバイナリのため、ビルド時のみ gcompat が必要 (実行時は不要)
+# ビルドに成功したら 0、条件を満たさない・失敗した場合は 1 を返す (呼び出し側で commander にフォールバック)
+build_redis_insight() {
+	_ver="$REDIS_INSIGHT_VERSION"
+	if [ -f "$RI_DIR/.version" ] && [ "$(cat "$RI_DIR/.version")" = "$_ver" ] &&
+		[ -f "$RI_DIR/api/dist/src/main.js" ]; then
+		log "Redis Insight $_ver はビルド済みです"
+		return 0
+	fi
+	_major="$(node -v | sed 's/^v//; s/\..*//')"
+	if [ "$_major" -lt 24 ]; then
+		warn "Redis Insight には Node.js 24 以上が必要です (現在: $(node -v))。Alpine 3.23 以降を使用してください"
+		return 1
+	fi
+	_mem_mb="$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)"
+	if [ "$_mem_mb" -lt 1800 ]; then
+		warn "Redis Insight のビルドにはメモリ 2GB 程度が必要です (${_mem_mb}MB)"
+		return 1
+	fi
+
+	log "Redis Insight $_ver を公式ソースからビルドします (数分かかります)"
+	apk add --no-cache --virtual .ri-build python3 py3-setuptools make g++ git linux-headers gcompat >/dev/null || return 1
+	_work="$INSTALL_DIR/ri-build"
+	rm -rf "$_work"
+	mkdir -p "$_work"
+	# set -e を効かせるため (if の条件内のサブシェルでは無効になる)、別プロセスで実行する
+	cat >"$_work.sh" <<'BUILD_EOF'
+set -eu
+cd "$RI_WORK"
+wget -qO- "https://github.com/RedisInsight/RedisInsight/archive/refs/tags/$RI_VER.tar.gz" |
+	tar xz --strip-components=1
+if [ -f yarn.lock ]; then
+	# 3.8.0 までは yarn 運用
+	command -v yarn >/dev/null || npm install -g --no-audit --no-fund yarn
+	SKIP_POSTINSTALL=1 yarn install
+	yarn --cwd redisinsight/api install
+	yarn build:ui
+	yarn build:statics
+	yarn build:api
+	yarn --cwd redisinsight/api install --production
+	cp redisinsight/api/.yarnclean.prod redisinsight/api/.yarnclean
+	yarn --cwd redisinsight/api autoclean --force
+else
+	# 以降は npm 運用
+	npm ci --ignore-scripts
+	npx patch-package
+	npm ci --prefix redisinsight/api
+	npm run build:ui
+	npm run build:statics
+	npm run build:api
+	npm ci --prefix redisinsight/api --omit=dev
+fi
+[ -f redisinsight/api/dist/src/main.js ] && [ -d redisinsight/ui/dist ]
+# 実行に必要なものだけを配置する
+rm -rf "$RI_DEST"
+mkdir -p "$RI_DEST/api" "$RI_DEST/ui"
+cp -r redisinsight/api/dist redisinsight/api/node_modules "$RI_DEST/api/"
+cp -r redisinsight/ui/dist "$RI_DEST/ui/"
+echo "$RI_VER" >"$RI_DEST/.version"
+BUILD_EOF
+	if RI_WORK="$_work" RI_VER="$_ver" RI_DEST="$RI_DIR" sh "$_work.sh"; then
+		_rc=0
+	else
+		_rc=1
+	fi
+	# 成否に関わらずビルド用の一時物は片付ける
+	rm -rf "$_work" "$_work.sh"
+	apk del .ri-build >/dev/null 2>&1 || true
+	[ "$_rc" = "0" ] || warn "Redis Insight のビルドに失敗しました"
+	return "$_rc"
+}
+
+setup_redis_insight() {
+	build_redis_insight || return 1
+	mkdir -p "$RI_DATA_DIR"
+	cat >"$BIN_DIR/run-redis-ui" <<EOF
+#!/bin/sh
+. "$CONF_FILE"
+export NODE_ENV=production RI_SERVE_STATICS=true RI_BUILD_TYPE=DOCKER_ON_PREMISE
+export RI_APP_FOLDER_ABSOLUTE_PATH="$RI_DATA_DIR" RI_APP_HOST="\$REDIS_UI_HOST" RI_APP_PORT=5540
+cd "$RI_DIR"
+exec node api/dist/src/main
+EOF
+	chmod 755 "$BIN_DIR/run-redis-ui"
+	write_initd ytdlp-redis-ui "Redis Insight (Redis Web UI)" "$BIN_DIR/run-redis-ui" "need redis"
+	enable_and_restart ytdlp-redis-ui
+}
+
+setup_redis_ui() {
+	if [ "$REDIS_UI" = "insight" ]; then
+		setup_redis_insight && return 0
+		warn "Redis Insight を導入できないため redis-commander で継続します"
+	fi
+	setup_redis_commander
 }
 
 # ---- 実行 -------------------------------------------------------------------
