@@ -29,7 +29,6 @@ usage() {
   REPO_REF          ブランチまたはタグ (埋め込み値)
   INSTALL_DIR       /opt/ytdlpserver
   DOWNLOAD_DIR      /mnt          動画の保存先
-  TMP_DIR           /tmpdownload  一時ダウンロード先 (アプリ側で固定)
   WORKER_COUNT      1             worker の数
   API_PORT          5000
   POT_PORT          4416          PO Token プロバイダ (127.0.0.1 限定)
@@ -76,7 +75,7 @@ die() {
 
 # ---- 設定の読み込み (環境変数 > 保存済み > 既定値) ---------------------------
 # 環境変数の指定を退避してから保存済みの設定を読み、指定があれば上書きする
-_ENV_KEYS="REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR TMP_DIR WORKER_COUNT API_PORT POT_PORT \
+_ENV_KEYS="REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR WORKER_COUNT API_PORT POT_PORT \
 SERVER_TTL REDIS_TTL RETRY_COUNT WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
 WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION RI_BUILD_STORAGE REDIS_UI_HOST"
 _saved=""
@@ -96,7 +95,6 @@ REPO_URL="${REPO_URL:-$REPO_URL_DEFAULT}"
 REPO_REF="${REPO_REF:-$REPO_REF_DEFAULT}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/ytdlpserver}"
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-/mnt}"
-TMP_DIR="${TMP_DIR:-/tmpdownload}"
 WORKER_COUNT="${WORKER_COUNT:-1}"
 API_PORT="${API_PORT:-5000}"
 POT_PORT="${POT_PORT:-4416}"
@@ -121,8 +119,6 @@ for _k in WORKER_COUNT API_PORT POT_PORT SERVER_TTL REDIS_TTL RETRY_COUNT; do
 	esac
 done
 [ "$WORKER_COUNT" -ge 1 ] || die "WORKER_COUNT は 1 以上にしてください"
-# アプリ側で /tmpdownload 固定のため変更は不可
-[ "$TMP_DIR" = "/tmpdownload" ] || die "TMP_DIR はアプリ側で /tmpdownload に固定されています"
 case "$REDIS_UI" in
 insight | commander) ;;
 *) die "REDIS_UI は insight か commander を指定してください: $REDIS_UI" ;;
@@ -154,7 +150,7 @@ write_conf() {
 	umask 077
 	{
 		echo "# ytdlpserver の設定 (install-alpine.sh が生成)。編集後は再起動すること。"
-		for _k in REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR TMP_DIR WORKER_COUNT API_PORT POT_PORT \
+		for _k in REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR WORKER_COUNT API_PORT POT_PORT \
 			SERVER_TTL REDIS_TTL RETRY_COUNT WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
 			WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION RI_BUILD_STORAGE REDIS_UI_HOST; do
 			eval "_v=\$$_k"
@@ -235,17 +231,7 @@ setup_pot_provider() {
 
 # ---- ディレクトリ -----------------------------------------------------------
 setup_dirs() {
-	mkdir -p "$DOWNLOAD_DIR" "$TMP_DIR"
-	# 一時領域は tmpfs にする。LXC で mount できない場合は通常ディレクトリで継続
-	if grep -q " $TMP_DIR tmpfs " /etc/fstab 2>/dev/null; then
-		:
-	else
-		echo "tmpfs $TMP_DIR tmpfs defaults,nosuid,nodev 0 0" >>/etc/fstab
-	fi
-	if ! mountpoint -q "$TMP_DIR"; then
-		mount "$TMP_DIR" 2>/dev/null ||
-			warn "$TMP_DIR を tmpfs にできませんでした。通常のディレクトリを使用します (ディスクに一時ファイルが作られます)"
-	fi
+	mkdir -p "$DOWNLOAD_DIR"
 }
 
 # ---- redis ------------------------------------------------------------------
@@ -297,7 +283,6 @@ EOF
 export PATH="$VENV_DIR/bin:\$PATH"
 export REDIS_URL="redis://127.0.0.1:6379" REDIS_TTL RETRY_COUNT DOWNLOAD_DIR
 "$BIN_DIR/update-ytdlp"
-cd "$TMP_DIR"
 exec "$VENV_DIR/bin/python3" -u "$SRC_DIR/workerServer/src/main.py"
 EOF
 	chmod 755 "$BIN_DIR"/*

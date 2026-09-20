@@ -6,7 +6,6 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-TMP_DIR = Path("/tmpdownload")
 SAVEDIR = Path(os.environ.get("DOWNLOAD_DIR", "/download"))
 COPY_TIMEOUT = int(os.environ.get("COPY_TIMEOUT", "120"))
 VIDEO_EXTS = {"avi", "flv", "mkv", "mov", "mp4", "webm"}

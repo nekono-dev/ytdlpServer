@@ -144,7 +144,7 @@ Alpine Linux 3.21 に Docker なしでインストールする。
 
 ### 1. 実行環境を用意する
 
-メモリは **1GB 以上**を割り当てる（pot-provider の `npm ci` と canvas のビルドに必要。128MB 程度ではほぼ完了しない）。ディスクは 4GB 以上を推奨する。Redis Insight をビルドする場合は、ビルド時のみ追加の要件がある（[追加する機能を選ぶ](#追加する機能を選ぶ)を参照）。
+メモリは **1GB 以上**を割り当てる（pot-provider の `npm ci` と canvas のビルドに必要。128MB 程度ではほぼ完了しない）。ディスクは 4GB 以上を推奨する。Redis Insight をビルドする場合は、ビルド時のみ追加の要件がある（[Redis の Web UI](#redis-の-web-ui)を参照）。
 
 **LXC の場合**、コンテナを作成してシェルに入る。
 
@@ -181,56 +181,70 @@ WORKER_COUNT=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
 
 初回は数分かかる。完了すると API の URL が表示される。
 
-設定値（すべて省略可）:
+設定値はすべて省略可。全項目は `sh install-alpine.sh --help` でも確認できる。
 
-| 環境変数     | 既定値   | 内容                               |
-| ------------ | -------- | ---------------------------------- |
-| DOWNLOAD_DIR | `/mnt`   | 動画の保存先                       |
-| WORKER_COUNT | `1`      | worker の数                        |
-| API_PORT     | `5000`   | API のポート                       |
-| SERVER_TTL   | `24`     | API を自動で再起動する間隔（時間） |
-| REDIS_TTL    | `604800` | redis のジョブ情報の保持期間（秒） |
-| RETRY_COUNT  | `5`      | ダウンロードのリトライ回数         |
+| 環境変数              | 既定値             | 内容                                                                               |
+| --------------------- | ------------------ | ---------------------------------------------------------------------------------- |
+| DOWNLOAD_DIR          | `/mnt`             | 動画の保存先                                                                       |
+| WORKER_COUNT          | `1`                | worker の数                                                                        |
+| API_PORT              | `5000`             | API のポート                                                                       |
+| POT_PORT              | `4416`             | PO Token プロバイダのポート（127.0.0.1 限定）                                      |
+| SERVER_TTL            | `24`               | API を自動で再起動する間隔（時間）                                                 |
+| REDIS_TTL             | `604800`           | redis のジョブ情報の保持期間（秒）                                                 |
+| RETRY_COUNT           | `5`                | ダウンロードのリトライ回数                                                         |
+| INSTALL_DIR           | `/opt/ytdlpserver` | ソースの配置先                                                                     |
+| REPO_URL / REPO_REF   | Release 埋め込み値 | 取得元リポジトリとブランチ・タグ                                                   |
+| WITH_NGINX            | `0`                | `1` で HTTPS（nginx）を有効化。[詳細](#httpsnginx)                                 |
+| SSL_CN                | `localhost`        | 自己署名証明書の CN。[詳細](#httpsnginx)                                           |
+| WITH_CLOUDFLARED      | `0`                | `1` で Cloudflare Tunnel を有効化。[詳細](#cloudflare-tunnel)                      |
+| CLOUDFLARE_TOKEN      | なし               | Cloudflare Tunnel のトークン（`WITH_CLOUDFLARED=1` で必須）                        |
+| WITH_REDIS_INSIGHT    | `1`                | `1` で Redis◊ の Web UI（5540）を有効化。[詳細](#redis-web-uiの設定)               |
+| REDIS_UI              | `insight`          | Web UI の種類（`insight` / `commander`）。[詳細](#redis-web-uiの設定)              |
+| REDIS_INSIGHT_VERSION | `3.8.0`            | ビルドする Redis Insight のタグ。[詳細](#redis-web-uiの設定)                       |
+| RI_BUILD_STORAGE      | `auto`             | Redis Insight のビルド先（`auto` / `tmpfs` / `disk`）。[詳細](#redis-web-uiの設定) |
+| REDIS_UI_HOST         | `0.0.0.0`          | Web UI の待ち受けアドレス                                                          |
 
-全項目は `sh install-alpine.sh --help` で確認できる。
+例: HTTPS を追加し、Redis の Web UI は軽量な commander にする。
 
-#### 追加する機能を選ぶ
+```sh
+WITH_NGINX=1 REDIS_UI=commander sh install-alpine.sh
+```
 
-必要な機能の環境変数を、上のコマンドに追加する。組み合わせて使える。
+#### HTTPS（nginx）の設定
 
-| 機能              | 環境変数                                                              | 詳細                                                         |
-| ----------------- | --------------------------------------------------------------------- | ------------------------------------------------------------ |
-| HTTPS（nginx）    | `WITH_NGINX=1`（証明書の CN は `SSL_CN=<ホスト名>`）                  | httpsを有効化（自己署名証明書）                              |
-| Cloudflare Tunnel | `WITH_CLOUDFLARED=1 CLOUDFLARE_TOKEN=<トークン>`                      | Cloudflare tunnelを有効化。                                  |
-| Redis の Web UI   | `WITH_REDIS_INSIGHT=1` `REDIS_UI=insight` または `REDIS_UI=commander` | RedisのWeb UIを有効化。アクセス先 `http://<IPアドレス>:5540` |
+`WITH_NGINX=1` で nginx（443）を導入し、HTTPS を有効にする。自己署名証明書を使い、証明書の CN は `SSL_CN=<ホスト名>` で指定する。
 
-- Cloudflare Tunnel は、Release から取得した `install-alpine.sh` でのみ使える。
-- Redis の Web UI はデフォルトで有効
-- Redis Insight は SSPL ライセンスのため、ビルド済みバイナリは配布しない。インストーラーが公式 GitHub のソース（`REDIS_INSIGHT_VERSION` のタグ、既定 `3.8.0`）を取得し、その場でビルドする
+API の URL は `https://<IPアドレス>/download` になる。
+
+#### Cloudflare Tunnelの設定
+
+`WITH_CLOUDFLARED=1 CLOUDFLARE_TOKEN=<トークン>` で Cloudflare Tunnel を有効にする。
+
+- Release から取得した `install-alpine.sh` でのみ使える。
+
+#### Redis Web UIの設定
+
+`WITH_REDIS_INSIGHT=1`（既定で有効）で Redis の Web UI を導入する。アクセス先は `http://<IPアドレス>:5540`。`REDIS_UI_HOST` で待ち受けアドレスを変更できる。
+
+- `REDIS_UI=commander` を指定すると、最初から軽量な redis-commander を使う。
+- Redis Insight は SSPL ライセンスのため、ビルド済みバイナリは配布しない。インストーラーが公式 GitHub のソース（`REDIS_INSIGHT_VERSION` のタグ）を取得し、その場でビルドする。
   - 要件: メモリ 2GB 以上、Node.js 24 以上（Alpine 3.23 以降）、初回の所要時間は約 6 分（ビルド済みなら再実行時はスキップ）
-  - **ビルド中はピークで約 9.5GB の作業領域を使う**（ソースと `node_modules` 約 3.3GB、yarn キャッシュ約 5.7GB）。作業領域はビルド後にすべて削除され、残るのは約 0.3GB のみ。置き場所は `RI_BUILD_STORAGE` で選ぶ
+  - 要件を満たさない場合やビルドに失敗した場合は、警告を出して redis-commander で継続する
+- **ビルド中はピークで約 9.5GB の作業領域を使う**（ソースと `node_modules` 約 3.3GB、yarn キャッシュ約 5.7GB）。作業領域はビルド後にすべて削除され、残るのは約 0.3GB のみ。置き場所は `RI_BUILD_STORAGE` で選ぶ。
 
-    | `RI_BUILD_STORAGE` | 作業領域                 | 必要な資源                                                    |
-    | ------------------ | ------------------------ | ------------------------------------------------------------- |
-    | `auto`（既定）     | メモリが足りれば tmpfs、足りない・マウントできなければ disk | 下記のいずれか                                                |
-    | `tmpfs`            | メモリ上（tmpfs）        | **インストール時のみ メモリ 12GB 程度**。ディスクは使わない。ビルド後にメモリは解放される |
-    | `disk`             | ディスク                 | **空き容量 10GB 程度**（ビルド中のみ）                        |
+| `RI_BUILD_STORAGE` | 作業領域                                                    | 必要な資源                                                                                |
+| ------------------ | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `auto`（既定）     | メモリが足りれば tmpfs、足りない・マウントできなければ disk | 下記のいずれか                                                                            |
+| `tmpfs`            | メモリ上（tmpfs）                                           | **インストール時のみ メモリ 12GB 程度**。ディスクは使わない。ビルド後にメモリは解放される |
+| `disk`             | ディスク                                                    | **空き容量 10GB 程度**（ビルド中のみ）                                                    |
 
-  - LXC の Proxmox でメモリ 2GB・ディスク 2GB のような小さなコンテナに入れる場合は、インストール時だけメモリを増やして（`pct set <CTID> -memory 12288`）`RI_BUILD_STORAGE=tmpfs` でビルドし、完了後に元のメモリへ戻せる。ディスクを増やせるなら `RI_BUILD_STORAGE=disk` でもよい
-  - tmpfs をマウントできない環境（権限のない LXC など）では、`auto` は disk にフォールバックし、`tmpfs` を明示した場合は警告を出して commander で継続する
-  - 要件を満たさない場合やビルドに失敗した場合は、警告を出して軽量な redis-commander で継続する
-  - `REDIS_UI=commander` を指定すると、最初から redis-commander を使う
+- LXC の Proxmox でメモリ 2GB・ディスク 2GB のような小さなコンテナに入れる場合は、インストール時だけメモリを増やして（`pct set <CTID> -memory 12288`）`RI_BUILD_STORAGE=tmpfs` でビルドし、完了後に元のメモリへ戻せる。ディスクを増やせるなら `RI_BUILD_STORAGE=disk` でもよい。
+- tmpfs をマウントできない環境（権限のない LXC など）では、`auto` は disk にフォールバックし、`tmpfs` を明示した場合は警告を出して commander で継続する。
 
 例: ディスクを使わず、メモリ上でビルドする。
 
 ```sh
 RI_BUILD_STORAGE=tmpfs sh install-alpine.sh
-```
-
-例: HTTPS と Redis の Web UI を追加する。
-
-```sh
-WITH_NGINX=1 WITH_REDIS_INSIGHT=1 sh install-alpine.sh
 ```
 
 ### 4. 動作確認する

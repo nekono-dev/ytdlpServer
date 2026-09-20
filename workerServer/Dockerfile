@@ -15,5 +15,4 @@ COPY src/ .
 COPY entrypoint.sh .
 RUN chmod +x /workspace/entrypoint.sh
 
-WORKDIR /tmpdownload
 ENTRYPOINT ["/workspace/entrypoint.sh"]
