@@ -229,7 +229,8 @@ wget -S -O /dev/null http://127.0.0.1:5000/download
 ## 設定を変更する（変更する項目だけ指定する。指定しない項目は前回の値のまま）
 WORKER_COUNT=8 sh install-alpine.sh
 
-## 更新する
+## 設定値の更新は /etc/conf.d/ytdlpserver の編集 + スクリプトの再実行でも対応可能
+vi /etc/conf.d/ytdlpserver
 sh install-alpine.sh
 
 ## 状態を見る
