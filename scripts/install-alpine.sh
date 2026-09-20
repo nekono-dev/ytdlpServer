@@ -98,7 +98,7 @@ SSL_CN="${SSL_CN:-localhost}"
 WITH_CLOUDFLARED="${WITH_CLOUDFLARED:-0}"
 CLOUDFLARE_TOKEN="${CLOUDFLARE_TOKEN:-}"
 WITH_REDIS_INSIGHT="${WITH_REDIS_INSIGHT:-0}"
-REDIS_UI_HOST="${REDIS_UI_HOST:-127.0.0.1}"
+REDIS_UI_HOST="${REDIS_UI_HOST:-0.0.0.0}"
 
 # 数値の検証
 for _k in WORKER_COUNT API_PORT POT_PORT SERVER_TTL REDIS_TTL RETRY_COUNT; do
@@ -140,6 +140,11 @@ write_conf() {
 
 # ---- パッケージ -------------------------------------------------------------
 install_packages() {
+	# メモリ不足だと npm ci / canvas のビルドが OOM kill やスラッシングで実質停止するため事前に検査する
+	_mem_mb="$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)"
+	if [ "$_mem_mb" -lt 1024 ]; then
+		die "メモリが不足しています (${_mem_mb}MB)。1GB 以上を割り当ててください (Proxmox: pct set <CTID> -memory 1024)"
+	fi
 	log "パッケージをインストールします"
 	apk update
 	# pot-provider の canvas は musl 向けのビルド済みバイナリが無く、ソースからビルドされる
