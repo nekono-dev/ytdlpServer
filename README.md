@@ -322,14 +322,15 @@ iOS ショートカットなどを作成すると楽に操作できる。
 
 `options` には yt-dlp のオプションを指定する。
 
-| やりたいこと                     | オプション                                                 |
-| -------------------------------- | ---------------------------------------------------------- |
-| YouTube の音声を日本語にする     | `--extractor-args youtube:lang=ja`                         |
-| ファイル名の文字化けを防ぐ       | `--windows-filenames`                                      |
-| ログインして取得する             | `-u <ユーザ名> -p <パスワード>`                            |
-| 出力形式を mp4 にする            | `--merge-output-format mp4`                                |
-| コーデックを avc1 (mp4) にする   | `-f "bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]"` |
-| 同じファイルを再ダウンロードする | `--force-overwrites`                                       |
+| やりたいこと                     | オプション                                             |
+| -------------------------------- | ------------------------------------------------------ |
+| YouTube の音声を日本語にする     | `-f "bestaudio[ext=m4a][language^=ja]"`                |
+| タイトル等を日本語の翻訳にする   | `--extractor-args youtube:lang=ja`（音声は変わらない） |
+| ファイル名の文字化けを防ぐ       | `--windows-filenames`                                  |
+| ログインして取得する             | `-u <ユーザ名> -p <パスワード>`                        |
+| 出力形式を mp4 にする            | `--merge-output-format mp4`                            |
+| コーデックを avc1 (mp4) にする   | `-f "bestvideo[vcodec^=avc1][ext=mp4]"`                |
+| 同じファイルを再ダウンロードする | `--force-overwrites`                                   |
 
 ---
 

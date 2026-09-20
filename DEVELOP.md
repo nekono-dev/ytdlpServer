@@ -205,7 +205,7 @@ docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download 
 ### リクエスト例
 
 ```sh
-curl -H "Content-type: application/json" -X POST "http://192.168.3.152:5000/download" -d '{"url":"<video url>","options":"--format bv*[vcodec^=avc1][ext=mp4]+ba[ext=m4a]/best --no-playlist --extractor-args youtube:lang=ja --windows-filenames --merge-output-format mp4", "savedir": "temp", "namefield": "%(title)s [%(id)s]"}'
+curl -H "Content-type: application/json" -X POST "http://192.168.3.152:5000/download" -d '{"url":"<video url>","options":"--format bv*[vcodec^=avc1][ext=mp4]+ba[ext=m4a][language^=ja]/bv*[vcodec^=avc1][ext=mp4]+ba[ext=m4a]/best --no-playlist --windows-filenames --merge-output-format mp4", "savedir": "temp", "namefield": "%(title)s [%(id)s]"}'
 ```
 
 スケジュール実行の例:
