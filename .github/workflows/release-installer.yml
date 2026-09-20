@@ -62,7 +62,7 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" dist/install-alpine.sh --clobber
           else
             # ブランチ名の / は - に変換する
-            tag="installer-$(echo "$GITHUB_REF_NAME" | tr '/' '-')"
+            tag="$(echo "$GITHUB_REF_NAME" | tr '/' '-')"
             gh release view "$tag" >/dev/null 2>&1 ||
               gh release create "$tag" --prerelease --target "$GITHUB_SHA" \
                 --title "$tag" --notes "ブランチ $GITHUB_REF_NAME 用のインストーラ (自動更新)"
