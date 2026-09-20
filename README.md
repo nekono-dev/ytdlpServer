@@ -205,7 +205,8 @@ WORKER_COUNT=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
 | Redis の Web UI         | `WITH_REDIS_INSIGHT=1`                           | `http://127.0.0.1:5540`（redis-commander）         |
 
 - Cloudflare Tunnel は、Release から取得した `install-alpine.sh` でのみ使える。
-- Redis の Web UI を別のホストから見る場合は `REDIS_UI_HOST=0.0.0.0` を付ける。
+- Redis の Web UI はデフォルトで有効
+- Redis の Web UI を別のホストから見る場合は `REDIS_UI_HOST=0.0.0.0` を付ける（デフォルト値）
 
 例: HTTPS と Redis の Web UI を追加する。
 
