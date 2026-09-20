@@ -57,11 +57,11 @@ sudo mount -a
 
 用途に応じて、使う compose ファイルを 1 つ選ぶ。以降の手順の `<ファイル>` に、選んだファイル名を指定する。
 
-| 構成                | `<ファイル>`                    | API の URL                          |
-| ------------------- | ------------------------------- | ----------------------------------- |
-| HTTP（基本）        | `docker-compose.yml`            | `http://<IPアドレス>:5000/download` |
-| HTTPS（nginx）      | `docker-compose.nginx.yml`      | `https://<IPアドレス>/download`     |
-| Cloudflare Tunnel   | `docker-compose.cloudflare.yml` | Cloudflare で設定したホスト名       |
+| 構成              | `<ファイル>`                    | API の URL                          |
+| ----------------- | ------------------------------- | ----------------------------------- |
+| HTTP（基本）      | `docker-compose.yml`            | `http://<IPアドレス>:5000/download` |
+| HTTPS（nginx）    | `docker-compose.nginx.yml`      | `https://<IPアドレス>/download`     |
+| Cloudflare Tunnel | `docker-compose.cloudflare.yml` | Cloudflare で設定したホスト名       |
 
 - HTTPS（nginx）は自己署名証明書を使う。
 - Cloudflare Tunnel は、ファイル内の `<YOUR_CLOUDFLARE_TOKEN>` をトークンに書き換える。
@@ -144,7 +144,7 @@ Alpine Linux 3.21 に Docker なしでインストールする。
 
 ### 1. 実行環境を用意する
 
-メモリは **1GB 以上**を割り当てる（pot-provider の `npm ci` と canvas のビルドに必要。128MB 程度ではほぼ完了しない）。ディスクは 4GB 以上を推奨する。
+メモリは **1GB 以上**を割り当てる（pot-provider の `npm ci` と canvas のビルドに必要。128MB 程度ではほぼ完了しない）。ディスクは 4GB 以上を推奨する。Redis Insight をビルドする場合は、ビルド時のみ追加の要件がある（[追加する機能を選ぶ](#追加する機能を選ぶ)を参照）。
 
 **LXC の場合**、コンテナを作成してシェルに入る。
 
@@ -183,14 +183,14 @@ WORKER_COUNT=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
 
 設定値（すべて省略可）:
 
-| 環境変数     | 既定値   | 内容                                        |
-| ------------ | -------- | ------------------------------------------- |
-| DOWNLOAD_DIR | `/mnt`   | 動画の保存先                                |
-| WORKER_COUNT | `1`      | worker の数                                 |
-| API_PORT     | `5000`   | API のポート                                |
-| SERVER_TTL   | `24`     | API を自動で再起動する間隔（時間）          |
-| REDIS_TTL    | `604800` | redis のジョブ情報の保持期間（秒）          |
-| RETRY_COUNT  | `5`      | ダウンロードのリトライ回数                  |
+| 環境変数     | 既定値   | 内容                               |
+| ------------ | -------- | ---------------------------------- |
+| DOWNLOAD_DIR | `/mnt`   | 動画の保存先                       |
+| WORKER_COUNT | `1`      | worker の数                        |
+| API_PORT     | `5000`   | API のポート                       |
+| SERVER_TTL   | `24`     | API を自動で再起動する間隔（時間） |
+| REDIS_TTL    | `604800` | redis のジョブ情報の保持期間（秒） |
+| RETRY_COUNT  | `5`      | ダウンロードのリトライ回数         |
 
 全項目は `sh install-alpine.sh --help` で確認できる。
 
@@ -198,19 +198,34 @@ WORKER_COUNT=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
 
 必要な機能の環境変数を、上のコマンドに追加する。組み合わせて使える。
 
-| 機能                    | 環境変数                                         | 接続先                                             |
-| ----------------------- | ------------------------------------------------ | -------------------------------------------------- |
-| HTTPS（nginx）          | `WITH_NGINX=1`（証明書の CN は `SSL_CN=<ホスト名>`） | `https://<IPアドレス>/download`（自己署名証明書） |
-| Cloudflare Tunnel       | `WITH_CLOUDFLARED=1 CLOUDFLARE_TOKEN=<トークン>` | Cloudflare で設定したホスト名                      |
-| Redis の Web UI         | `WITH_REDIS_INSIGHT=1`                           | `http://<IPアドレス>:5540`（Redis Insight）        |
+| 機能              | 環境変数                                                              | 詳細                                                         |
+| ----------------- | --------------------------------------------------------------------- | ------------------------------------------------------------ |
+| HTTPS（nginx）    | `WITH_NGINX=1`（証明書の CN は `SSL_CN=<ホスト名>`）                  | httpsを有効化（自己署名証明書）                              |
+| Cloudflare Tunnel | `WITH_CLOUDFLARED=1 CLOUDFLARE_TOKEN=<トークン>`                      | Cloudflare tunnelを有効化。                                  |
+| Redis の Web UI   | `WITH_REDIS_INSIGHT=1` `REDIS_UI=insight` または `REDIS_UI=commander` | RedisのWeb UIを有効化。アクセス先 `http://<IPアドレス>:5540` |
 
 - Cloudflare Tunnel は、Release から取得した `install-alpine.sh` でのみ使える。
 - Redis の Web UI はデフォルトで有効
 - Redis Insight は SSPL ライセンスのため、ビルド済みバイナリは配布しない。インストーラーが公式 GitHub のソース（`REDIS_INSIGHT_VERSION` のタグ、既定 `3.8.0`）を取得し、その場でビルドする
   - 要件: メモリ 2GB 以上、Node.js 24 以上（Alpine 3.23 以降）、初回の所要時間は約 6 分（ビルド済みなら再実行時はスキップ）
+  - **ビルド中はピークで約 9.5GB の作業領域を使う**（ソースと `node_modules` 約 3.3GB、yarn キャッシュ約 5.7GB）。作業領域はビルド後にすべて削除され、残るのは約 0.3GB のみ。置き場所は `RI_BUILD_STORAGE` で選ぶ
+
+    | `RI_BUILD_STORAGE` | 作業領域                 | 必要な資源                                                    |
+    | ------------------ | ------------------------ | ------------------------------------------------------------- |
+    | `auto`（既定）     | メモリが足りれば tmpfs、足りない・マウントできなければ disk | 下記のいずれか                                                |
+    | `tmpfs`            | メモリ上（tmpfs）        | **インストール時のみ メモリ 12GB 程度**。ディスクは使わない。ビルド後にメモリは解放される |
+    | `disk`             | ディスク                 | **空き容量 10GB 程度**（ビルド中のみ）                        |
+
+  - LXC の Proxmox でメモリ 2GB・ディスク 2GB のような小さなコンテナに入れる場合は、インストール時だけメモリを増やして（`pct set <CTID> -memory 12288`）`RI_BUILD_STORAGE=tmpfs` でビルドし、完了後に元のメモリへ戻せる。ディスクを増やせるなら `RI_BUILD_STORAGE=disk` でもよい
+  - tmpfs をマウントできない環境（権限のない LXC など）では、`auto` は disk にフォールバックし、`tmpfs` を明示した場合は警告を出して commander で継続する
   - 要件を満たさない場合やビルドに失敗した場合は、警告を出して軽量な redis-commander で継続する
   - `REDIS_UI=commander` を指定すると、最初から redis-commander を使う
-- Redis の Web UI を別のホストから見る場合は `REDIS_UI_HOST=0.0.0.0` を付ける（デフォルト値）
+
+例: ディスクを使わず、メモリ上でビルドする。
+
+```sh
+RI_BUILD_STORAGE=tmpfs sh install-alpine.sh
+```
 
 例: HTTPS と Redis の Web UI を追加する。
 
@@ -280,12 +295,12 @@ iOS ショートカットなどを作成すると楽に操作できる。
 
 ### リクエストの項目
 
-| 項目      | 型     | 内容                                                           |
-| --------- | ------ | -------------------------------------------------------------- |
-| url       | string | ダウンロードする動画の URL                                     |
-| options   | string | yt-dlp のオプション                                            |
-| savedir   | string | 保存先のサブディレクトリ（指定した場合、作成して保存する）     |
-| namefield | string | 保存ファイル名のテンプレート（例: `%(title)s-%(id)s`）         |
+| 項目      | 型     | 内容                                                       |
+| --------- | ------ | ---------------------------------------------------------- |
+| url       | string | ダウンロードする動画の URL                                 |
+| options   | string | yt-dlp のオプション                                        |
+| savedir   | string | 保存先のサブディレクトリ（指定した場合、作成して保存する） |
+| namefield | string | 保存ファイル名のテンプレート（例: `%(title)s-%(id)s`）     |
 
 `namefield` は yt-dlp の `%(key)s` 形式で指定する。拡張子は自動で付く。
 
@@ -293,14 +308,14 @@ iOS ショートカットなどを作成すると楽に操作できる。
 
 `options` には yt-dlp のオプションを指定する。
 
-| やりたいこと                         | オプション                                                             |
-| ------------------------------------ | ---------------------------------------------------------------------- |
-| YouTube の音声を日本語にする         | `--extractor-args youtube:lang=ja`                                     |
-| ファイル名の文字化けを防ぐ           | `--windows-filenames`                                                  |
-| ログインして取得する                 | `-u <ユーザ名> -p <パスワード>`                                        |
-| 出力形式を mp4 にする                | `--merge-output-format mp4`                                            |
-| コーデックを avc1 (mp4) にする       | `-f "bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]"`             |
-| 同じファイルを再ダウンロードする     | `--force-overwrites`                                                   |
+| やりたいこと                     | オプション                                                 |
+| -------------------------------- | ---------------------------------------------------------- |
+| YouTube の音声を日本語にする     | `--extractor-args youtube:lang=ja`                         |
+| ファイル名の文字化けを防ぐ       | `--windows-filenames`                                      |
+| ログインして取得する             | `-u <ユーザ名> -p <パスワード>`                            |
+| 出力形式を mp4 にする            | `--merge-output-format mp4`                                |
+| コーデックを avc1 (mp4) にする   | `-f "bestvideo[vcodec^=avc1][ext=mp4]+bestaudio[ext=m4a]"` |
+| 同じファイルを再ダウンロードする | `--force-overwrites`                                       |
 
 ---
 

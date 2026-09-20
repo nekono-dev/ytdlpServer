@@ -48,6 +48,11 @@ usage() {
                     ビルド済みバイナリは配布しない)。要 メモリ 2GB / Node.js 24 以上 /
                     所要 約 6 分。満たせない・失敗した場合は commander で継続する
   REDIS_INSIGHT_VERSION 3.8.0     ビルドする Redis Insight のタグ
+  RI_BUILD_STORAGE  auto          Redis Insight のビルド先 (tmpfs | disk | auto)
+                    tmpfs: 作業領域とキャッシュをメモリ上に置く。ディスクを使わないが
+                           インストール時のみ メモリ 12GB 程度が必要 (終了後に解放)
+                    disk:  ディスクを使う。空き 10GB 程度が必要 (ビルド後に削除)
+                    auto:  メモリが足りれば tmpfs、足りない・マウントできなければ disk
   REDIS_UI_HOST     0.0.0.0       Web UI の待ち受けアドレス
 EOF
 }
@@ -73,7 +78,7 @@ die() {
 # 環境変数の指定を退避してから保存済みの設定を読み、指定があれば上書きする
 _ENV_KEYS="REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR TMP_DIR WORKER_COUNT API_PORT POT_PORT \
 SERVER_TTL REDIS_TTL RETRY_COUNT WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
-WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION REDIS_UI_HOST"
+WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION RI_BUILD_STORAGE REDIS_UI_HOST"
 _saved=""
 for _k in $_ENV_KEYS; do
 	if eval "[ \"\${$_k+set}\" = set ]"; then
@@ -105,6 +110,7 @@ CLOUDFLARE_TOKEN="${CLOUDFLARE_TOKEN:-}"
 WITH_REDIS_INSIGHT="${WITH_REDIS_INSIGHT:-1}"
 REDIS_UI="${REDIS_UI:-insight}"
 REDIS_INSIGHT_VERSION="${REDIS_INSIGHT_VERSION:-$RI_VERSION_DEFAULT}"
+RI_BUILD_STORAGE="${RI_BUILD_STORAGE:-auto}"
 REDIS_UI_HOST="${REDIS_UI_HOST:-0.0.0.0}"
 
 # 数値の検証
@@ -120,6 +126,10 @@ done
 case "$REDIS_UI" in
 insight | commander) ;;
 *) die "REDIS_UI は insight か commander を指定してください: $REDIS_UI" ;;
+esac
+case "$RI_BUILD_STORAGE" in
+tmpfs | disk | auto) ;;
+*) die "RI_BUILD_STORAGE は tmpfs / disk / auto のいずれかを指定してください: $RI_BUILD_STORAGE" ;;
 esac
 case "$REDIS_INSIGHT_VERSION" in
 '' | *[!0-9A-Za-z._-]*) die "REDIS_INSIGHT_VERSION が不正です: $REDIS_INSIGHT_VERSION" ;;
@@ -146,7 +156,7 @@ write_conf() {
 		echo "# ytdlpserver の設定 (install-alpine.sh が生成)。編集後は再起動すること。"
 		for _k in REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR TMP_DIR WORKER_COUNT API_PORT POT_PORT \
 			SERVER_TTL REDIS_TTL RETRY_COUNT WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
-			WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION REDIS_UI_HOST; do
+			WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION RI_BUILD_STORAGE REDIS_UI_HOST; do
 			eval "_v=\$$_k"
 			echo "$_k=$(q "$_v")"
 		done
@@ -410,6 +420,10 @@ EOF
 }
 
 # ---- オプション: Redis Insight (公式ソースから現地ビルド) --------------------
+# ビルド時の所要量 (MB。実測のピーク約 9.5GB に余裕を持たせた値)
+RI_TMPFS_SIZE_MB=11000     # tmpfs の上限
+RI_TMPFS_MIN_MEM_MB=12000  # tmpfs 利用に必要なメモリ (node のビルド処理分を含む)
+RI_DISK_MIN_FREE_MB=10000  # disk 利用に必要な空き容量
 # sass-embedded の glibc 向けバイナリのため、ビルド時のみ gcompat が必要 (実行時は不要)
 # ビルドに成功したら 0、条件を満たさない・失敗した場合は 1 を返す (呼び出し側で commander にフォールバック)
 build_redis_insight() {
@@ -430,15 +444,54 @@ build_redis_insight() {
 		return 1
 	fi
 
-	log "Redis Insight $_ver を公式ソースからビルドします (数分かかります)"
-	apk add --no-cache --virtual .ri-build python3 py3-setuptools make g++ git linux-headers gcompat >/dev/null || return 1
 	_work="$INSTALL_DIR/ri-build"
+	mkdir -p "$INSTALL_DIR"
+	# 前回の中断で tmpfs が残っていても再実行できるようにする
+	umount "$_work" 2>/dev/null || true
 	rm -rf "$_work"
 	mkdir -p "$_work"
+
+	# ビルドはピークで作業領域 約3.3GB + yarn キャッシュ 約5.7GB を使う。
+	# tmpfs ならこれをメモリ上に置いてディスクを使わない (umount で全て解放される)
+	_storage="$RI_BUILD_STORAGE"
+	if [ "$_storage" != "disk" ]; then
+		if [ "$_mem_mb" -lt "$RI_TMPFS_MIN_MEM_MB" ]; then
+			if [ "$_storage" = "tmpfs" ]; then
+				warn "tmpfs でのビルドにはメモリ ${RI_TMPFS_MIN_MEM_MB}MB 程度が必要です (${_mem_mb}MB)"
+				return 1
+			fi
+			_storage="disk"
+		elif mount -t tmpfs -o "size=${RI_TMPFS_SIZE_MB}m" tmpfs "$_work" 2>/dev/null; then
+			_storage="tmpfs"
+		elif [ "$_storage" = "tmpfs" ]; then
+			warn "tmpfs をマウントできません (LXC の権限を確認してください)"
+			return 1
+		else
+			warn "tmpfs をマウントできないためディスクでビルドします"
+			_storage="disk"
+		fi
+	fi
+	if [ "$_storage" = "disk" ]; then
+		_free_mb="$(df -Pm "$_work" | awk 'NR==2 {print $4}')"
+		if [ "$_free_mb" -lt "$RI_DISK_MIN_FREE_MB" ]; then
+			warn "ビルドにはディスクの空き ${RI_DISK_MIN_FREE_MB}MB 程度が必要です (${_free_mb}MB)。RI_BUILD_STORAGE=tmpfs も選べます"
+			rm -rf "$_work"
+			return 1
+		fi
+	fi
+
+	log "Redis Insight $_ver を公式ソースからビルドします (作業領域: $_storage、数分かかります)"
+	if ! apk add --no-cache --virtual .ri-build python3 py3-setuptools make g++ git linux-headers gcompat >/dev/null; then
+		[ "$_storage" = "tmpfs" ] && umount "$_work"
+		rm -rf "$_work"
+		return 1
+	fi
 	# set -e を効かせるため (if の条件内のサブシェルでは無効になる)、別プロセスで実行する
 	cat >"$_work.sh" <<'BUILD_EOF'
 set -eu
 cd "$RI_WORK"
+# キャッシュも作業領域に置く (tmpfs ならメモリ上、disk なら後で作業領域ごと削除される)
+export XDG_CACHE_HOME="$RI_WORK/.cache" YARN_CACHE_FOLDER="$RI_WORK/.cache/yarn" npm_config_cache="$RI_WORK/.cache/npm"
 wget -qO- "https://github.com/RedisInsight/RedisInsight/archive/refs/tags/$RI_VER.tar.gz" |
 	tar xz --strip-components=1
 if [ -f yarn.lock ]; then
@@ -475,7 +528,8 @@ BUILD_EOF
 	else
 		_rc=1
 	fi
-	# 成否に関わらずビルド用の一時物は片付ける
+	# 成否に関わらずビルド用の一時物は片付ける (tmpfs は umount でメモリを解放する)
+	[ "$_storage" = "tmpfs" ] && umount "$_work"
 	rm -rf "$_work" "$_work.sh"
 	apk del .ri-build >/dev/null 2>&1 || true
 	[ "$_rc" = "0" ] || warn "Redis Insight のビルドに失敗しました"
