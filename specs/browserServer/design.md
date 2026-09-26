@@ -30,25 +30,29 @@ flowchart LR
 | ポート | 8080（操作画面・制御 API）、6080（noVNC）。どちらも LAN に公開する |
 | loopback のみ | Chromium の CDP（9222）、x11vnc の RFB（5900、`-localhost`）は、コンテナ内に閉じる |
 | ボリューム | `./cookies:/cookies`（cookie ストア。api・worker と共有） |
-| compose | 3 つの compose ファイルすべてに `browser` サービスを追加（`shm_size: 512m`、`restart: always`）。Tunnel 構成でも、Tunnel の対象は API のみ |
-| 環境変数 | `COOKIE_DIR`（既定 `/cookies`）、`SESSION_TIMEOUT`（秒、既定 900）、`PORT`（既定 8080） |
+| compose | 3 つの compose ファイルすべてに `browser` サービスを追加（`shm_size: 512m`、`init: true`、`restart: always`）。Tunnel 構成でも、Tunnel の対象は API のみ |
+| 環境変数 | `COOKIE_DIR`（既定 `/cookies`）、`SESSION_TIMEOUT`（秒、既定 900）、`PORT`（既定 8080）、`NOVNC_PORT`（既定 6080） |
 
-apiServer / workerServer には、環境変数 `BROWSER_UI_URL`（例 `http://<サーバの IP>:8080`）を設定する。
+apiServer / workerServer には、環境変数 `BROWSER_UI_URL`（例 `http://<サーバの IP>:8080`）を設定する。compose では `${BROWSER_UI_URL:-}`（`.env` またはシェルの値。未設定なら空で、`login_url` は `null`）。
 
 ### ログイン操作の状態
 
 ```mermaid
 stateDiagram-v2
     [*] --> idle
-    idle --> running: POST /session
+    idle --> starting: POST /session
+    starting --> running: ブラウザ起動完了
+    starting --> idle: 起動失敗
     running --> committing: POST /session/commit
-    committing --> idle: 保存成功・失敗のどちらも
+    committing --> idle: 保存成功、または内部エラー
+    committing --> running: 対象の cookie が 0 件（未ログイン）
     running --> idle: DELETE /session
     running --> idle: SESSION_TIMEOUT
 ```
 
-- 同時に 1 件。`running` / `committing` 中の開始は 409（B7）。
-- idle に戻るときは、必ず Chromium を終了し、ブラウザのプロファイル（`/tmp/profile-<id>`）を削除する（B6）。
+- 同時に 1 件。idle 以外での開始は 409（B7）。保存中の取り消しは 409。
+- idle に戻るときは、必ず Chromium を終了し、ブラウザのプロファイル（`/tmp/profile-*`）を削除する（B6）。
+- 保存時に対象の cookie が 0 件のとき（保存ボタンが早すぎた場合）は、ブラウザを残して `running` に戻し、続けてログインできるようにする。タイムアウトは、開始時点からの期限のまま。
 
 ### 制御 API（LAN 内のみ、認証なし）
 
@@ -61,7 +65,7 @@ stateDiagram-v2
 | DELETE | `/session` | 取り消し（何も保存しない） |
 
 - `profile` は `[A-Za-z0-9_-]{1,64}`、`start_url` は `http(s)` のみ。
-- Chromium は `start_url` を開いた状態で起動する。フラグ: `--no-sandbox`（コンテナ内で必要）、`--disable-dev-shm-usage`、`--remote-debugging-port=9222`、`--user-data-dir=/tmp/profile-<id>`、`--window-position=0,0 --window-size=1280,800`、`--no-first-run`、`--lang=ja`。
+- Chromium は `start_url` を開いた状態で起動する。フラグ: `--no-sandbox`（コンテナ内で必要）、`--disable-dev-shm-usage`、`--disable-gpu`、`--remote-debugging-port=9222`、`--user-data-dir=/tmp/profile-<id>`、`--window-position=0,0 --window-size=1280,800`、`--no-first-run`、`--lang=ja`。
 
 ### cookie の回収と保存（commit）
 

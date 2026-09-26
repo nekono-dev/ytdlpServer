@@ -16,9 +16,12 @@
 検証: 検証サーバ（Ubuntu 24.04、Docker Compose）で、有効 cookie の取得（mp4 1.4MB）、キュー投入後に失効した cookie のジョブが `error_code=login_required` で失敗し、再試行されないこと、ログに cookie の値・パスが出ないことを確認。
 既知の未検証事項: Alpine インストーラ（`sh -n` の構文確認のみ）。
 
-## cookie セッション認証（Phase 2、未着手）
+## cookie セッション認証（Phase 2、検証完了）
 
 設計は [design.md](design.md)。
 
-- [ ] `login_url` を、ジョブの URL の origin を `start_url` にして組み立てる
-- [ ] 単体テスト
+- [x] `login_url` を、ジョブの URL の origin を `start_url` にして組み立てる（`record_failure`）
+- [x] 単体テスト（`test_record_failure_login_url`）
+- [x] compose に `BROWSER_UI_URL`（`${BROWSER_UI_URL:-}`）を追加する
+
+検証: 単体テスト。実機では、キュー投入後に失効したジョブの `login_url` は未確認（API 側の 401 と同じ組み立てを共用）。

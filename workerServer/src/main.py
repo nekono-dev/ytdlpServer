@@ -127,7 +127,9 @@ def update_status(key: str, status: str, extra: dict[str, Any] | None = None) ->
     return new_key
 
 
-def record_failure(key: str, auth_profile: str | None, output: str) -> str:
+def record_failure(
+        key: str, auth_profile: str | None, output: str,
+        url: str | None = None) -> str:
     """失敗を記録する。ログイン要求なら error_code を付け、cookie を失効扱いにする。"""
     try:
         redis_client.hincrby(key, "failed_count", 1)
@@ -139,7 +141,7 @@ def record_failure(key: str, auth_profile: str | None, output: str) -> str:
         "login_url": ""}
     if cookies.classify_login_required(output):
         extra["error_code"] = "login_required"
-        extra["login_url"] = cookies.login_url(auth_profile) or ""
+        extra["login_url"] = cookies.login_url(auth_profile, url) or ""
         if auth_profile:
             cookies.mark_expired(redis_client, auth_profile)
         print("WARNING: login required. profile:", auth_profile or "(none)")
@@ -169,7 +171,7 @@ def handle_job(raw: str) -> None:
             key, "completed", {"completed_at": str(time.time()), "output": output})
     else:
         # increment failed_count on current key, then migrate to failed
-        key = record_failure(key, job.get("auth_profile"), output)
+        key = record_failure(key, job.get("auth_profile"), output, job.get("url"))
 
 
 def is_waiting_for_login(key: str) -> bool:
@@ -239,7 +241,7 @@ def process_failed_key(key: str) -> None:
     if ok:
         update_status(key, "completed", {"completed_at": str(time.time()), "output": output})
     else:
-        record_failure(key, job.get("auth_profile"), output)
+        record_failure(key, job.get("auth_profile"), output, job.get("url"))
 
 
 def main() -> int:

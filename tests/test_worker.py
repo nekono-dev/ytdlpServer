@@ -72,6 +72,14 @@ class WorkerTest(unittest.TestCase):
         self.assertEqual((h["error_code"], h["failed_count"]), ("login_required", "1"))
         self.assertEqual(self.c.profile_state(self.redis, "nico"), "expired")
 
+    def test_record_failure_login_url(self) -> None:
+        from urllib.parse import parse_qs, urlsplit
+        self.c.BROWSER_UI_URL = "http://h:8080"
+        key = self.make_failed("j3", auth_profile="nico")
+        new = self.m.record_failure(key, "nico", LOGIN_ERR, "https://www.nicovideo.jp/watch/sm1")
+        q = parse_qs(urlsplit(self.redis.hgetall(new)["login_url"]).query)
+        self.assertEqual(q, {"profile": ["nico"], "start_url": ["https://www.nicovideo.jp/"]})
+
     def test_record_failure_other_error_clears_code(self) -> None:
         key = self.make_failed("j2", auth_profile="nico", error_code="login_required")
         new = self.m.record_failure(key, "nico", "HTTP Error 500")

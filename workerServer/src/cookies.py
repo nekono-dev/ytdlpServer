@@ -16,7 +16,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
-from urllib.parse import quote
+from urllib.parse import quote, urlencode, urlsplit
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -58,6 +58,22 @@ def validate_profile(name: object) -> str:
 
 def cookie_path(profile: str) -> Path:
     return COOKIE_DIR / f"{validate_profile(profile)}.txt"
+
+
+def save_profile(profile: str, data: bytes) -> Path:
+    """cookie を <profile>.txt へ保存する(0600、一時ファイル経由の置き換え)。
+
+    読み手(yt-dlp を動かす API/Worker)に書きかけの内容を見せない。
+    """
+    dst = cookie_path(profile)
+    COOKIE_DIR.mkdir(parents=True, exist_ok=True)
+    staging = dst.with_name(f".{dst.name}.tmp")
+    fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    staging.chmod(0o600)  # 既存の一時ファイルが残っていた場合も権限を揃える
+    staging.replace(dst)
+    return dst
 
 
 def check_options(options: list[str]) -> None:
@@ -132,10 +148,7 @@ def cookie_file(profile: str | None) -> Iterator[str | None]:
         try:
             updated = Path(tmp).read_bytes()
             if updated and updated != original:
-                staging = src.with_name(f".{src.name}.tmp")
-                staging.write_bytes(updated)
-                staging.chmod(0o600)
-                staging.replace(src)
+                save_profile(profile, updated)
         except OSError as e:
             print("WARNING: Failed to write back cookies:", e)
         finally:
@@ -195,7 +208,18 @@ def list_profiles(client: Redis | None) -> list[dict]:
     return results
 
 
-def login_url(profile: str | None) -> str | None:
+def login_url(profile: str | None, url: str | None = None) -> str | None:
+    """再ログイン用画面の URL。BROWSER_UI_URL が未設定なら None。
+
+    profile があれば入力済みにする。url があれば、その origin を開始 URL にする。
+    """
     if not BROWSER_UI_URL:
         return None
-    return f"{BROWSER_UI_URL}/?profile={quote(profile or '')}"
+    params: dict[str, str] = {}
+    if profile:
+        params["profile"] = profile
+    parts = urlsplit(url or "")
+    if parts.scheme in ("http", "https") and parts.netloc:
+        params["start_url"] = f"{parts.scheme}://{parts.netloc}/"
+    query = urlencode(params, quote_via=quote)
+    return f"{BROWSER_UI_URL}/?{query}" if query else f"{BROWSER_UI_URL}/"

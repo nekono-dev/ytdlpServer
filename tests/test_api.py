@@ -55,6 +55,25 @@ class ApiTest(unittest.TestCase):
             self.assertEqual(r.status_code, 200)
             probe.assert_called_once()
 
+    def test_login_url_in_401(self) -> None:
+        from urllib.parse import parse_qs, urlsplit
+        self.c.BROWSER_UI_URL = "http://h:8080"
+        err = self.c.LoginRequiredError("login required")
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", side_effect=err):
+            r = self.post(auth_profile="nico")
+        q = parse_qs(urlsplit(r.json["login_url"]).query)
+        self.assertEqual(q, {"profile": ["nico"], "start_url": ["https://x/"]})
+        # 未指定でも、開始 URL 入りの URL を返す
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", side_effect=err):
+            r = self.post()
+        self.assertEqual(parse_qs(urlsplit(r.json["login_url"]).query),
+                         {"start_url": ["https://x/"]})
+
+    def test_profiles_endpoint_login_url(self) -> None:
+        self.c.BROWSER_UI_URL = "http://h:8080"
+        r = self.client.get("/auth/profiles")
+        self.assertEqual(r.json[0]["login_url"], "http://h:8080/?profile=nico")
+
     def test_unknown_profile(self) -> None:
         with mock.patch.object(self.m.function, "probe_and_build_jobs") as probe:
             r = self.post(auth_profile="ghost")

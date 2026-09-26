@@ -63,7 +63,8 @@ flowchart TD
 | 項目 | 内容 |
 |---|---|
 | `login_url` | 環境変数 `BROWSER_UI_URL` があるとき `<BROWSER_UI_URL>/?profile=<プロファイル名>&start_url=<リクエスト URL の origin>`。無いときは `null` |
-| 適用範囲 | 401 の全 reason、`GET /auth/profiles` の各行 |
+| 適用範囲 | 401 の全 reason（`profile` と `start_url` を付ける）、`GET /auth/profiles` の各行（`profile` のみ。URL が無いため `start_url` は付けない） |
 
-- プロファイル名は URL エンコードする。`auth_profile` 未指定（`cookie_missing`）でも、`start_url` は付ける（`profile` は空）。
+- クエリは URL エンコードする。`auth_profile` 未指定（`cookie_missing`）でも `start_url` は付ける（`profile` は付けない）。
+- `start_url` はリクエスト URL の origin（`http(s)://ホスト/`）。`http(s)` 以外の URL では付けない。
 - cookie を登録する API は追加しない（A8）。

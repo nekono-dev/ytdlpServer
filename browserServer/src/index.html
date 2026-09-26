@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ブラウザでログイン</title>
+<style>
+  :root { --bg:#fff; --fg:#1a1a1a; --sub:#666; --line:#d0d0d0; --accent:#0b62d6; --ok:#137333; --err:#b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161616; --fg:#e8e8e8; --sub:#a0a0a0; --line:#3a3a3a; --accent:#6ea8fe; --ok:#7bd88f; --err:#ff8a80; }
+  }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:15px/1.6 system-ui,sans-serif; }
+  main { max-width:1320px; margin:0 auto; }
+  h1 { font-size:20px; margin:0 0 12px; }
+  label { display:block; margin:10px 0 2px; color:var(--sub); font-size:13px; }
+  input { width:100%; max-width:520px; box-sizing:border-box; padding:8px; border:1px solid var(--line);
+          border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; }
+  button { padding:8px 16px; margin-right:8px; border:1px solid var(--line); border-radius:6px;
+           background:var(--bg); color:var(--fg); font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  #bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; }
+  #msg { min-height:1.6em; margin:8px 0; }
+  #msg.ok { color:var(--ok); } #msg.err { color:var(--err); }
+  iframe { width:100%; height:calc(100vh - 170px); min-height:480px; border:1px solid var(--line); border-radius:6px; }
+  .hint { color:var(--sub); font-size:13px; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ブラウザでログイン</h1>
+
+  <section id="form">
+    <p class="hint">プロファイル名と開始 URL を指定して開始し、表示されたブラウザでログインします。
+      ログインが終わったら「cookie を保存」を押してください。</p>
+    <label for="profile">プロファイル名（英数字・-・_）</label>
+    <input id="profile" autocomplete="off" placeholder="例: nico">
+    <label for="start_url">開始 URL（ログインするサイト）</label>
+    <input id="start_url" autocomplete="off" placeholder="例: https://account.nicovideo.jp/login">
+    <p><button id="start" class="primary">ログイン用ブラウザを開く</button></p>
+  </section>
+
+  <section id="running" hidden>
+    <div id="bar">
+      <button id="commit" class="primary">cookie を保存</button>
+      <button id="cancel">キャンセル</button>
+      <span>プロファイル: <b id="p"></b></span>
+      <span class="hint">残り <span id="remain"></span></span>
+    </div>
+    <div id="msg2" class="hint">ログインが終わったら「cookie を保存」を押します。</div>
+    <iframe id="vnc" title="ログイン用ブラウザ"></iframe>
+  </section>
+
+  <div id="msg" role="status"></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let state = "idle", vncLoaded = false;
+
+function say(text, cls) { $("msg").textContent = text || ""; $("msg").className = cls || ""; }
+
+async function api(method, path, body) {
+  const r = await fetch(path, { method, headers: {"Content-Type": "application/json"},
+                                body: body ? JSON.stringify(body) : undefined });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.message || ("エラー (" + r.status + ")"));
+  return data;
+}
+
+function render(s) {
+  const running = s.state === "running" || s.state === "committing";
+  $("form").hidden = running; $("running").hidden = !running;
+  $("commit").disabled = $("cancel").disabled = s.state !== "running";
+  if (running) {
+    $("p").textContent = s.profile || "";
+    const m = Math.floor(s.remaining / 60), sec = String(s.remaining % 60).padStart(2, "0");
+    $("remain").textContent = m + ":" + sec;
+    if (!vncLoaded) {
+      $("vnc").src = location.protocol + "//" + location.hostname + ":" + s.novnc_port +
+                     "/vnc.html?autoconnect=true&resize=scale&reconnect=true";
+      vncLoaded = true;
+    }
+  } else {
+    if (vncLoaded) { $("vnc").src = "about:blank"; vncLoaded = false; }
+    if (state === "running" && s.state === "idle" && !$("msg").textContent) {
+      say("ログイン操作が終了しました（時間切れ、または取り消し）。", "err");
+    }
+  }
+  state = s.state;
+}
+
+async function refresh() {
+  try { render(await api("GET", "/session")); } catch (e) { say(e.message, "err"); }
+}
+
+$("start").onclick = async () => {
+  say("");
+  try {
+    $("start").disabled = true;
+    render(await api("POST", "/session", { profile: $("profile").value.trim(), start_url: $("start_url").value.trim() }));
+  } catch (e) { say(e.message, "err"); } finally { $("start").disabled = false; }
+};
+$("commit").onclick = async () => {
+  say("");
+  try {
+    $("commit").disabled = true;
+    const r = await api("POST", "/session/commit");
+    say("保存しました（" + r.domain + " の cookie " + r.saved + " 件）。プロファイル名 “" + r.profile + "” を auth_profile に指定できます。", "ok");
+    await refresh();
+  } catch (e) { say(e.message, "err"); await refresh(); }
+};
+$("cancel").onclick = async () => {
+  say("");
+  try { await api("DELETE", "/session"); say("取り消しました。何も保存していません。"); } catch (e) { say(e.message, "err"); }
+  await refresh();
+};
+
+const q = new URLSearchParams(location.search);
+if (q.get("profile")) $("profile").value = q.get("profile");
+if (q.get("start_url")) $("start_url").value = q.get("start_url");
+refresh(); setInterval(refresh, 2000);
+</script>
+</body>
+</html>

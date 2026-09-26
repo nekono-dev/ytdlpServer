@@ -351,6 +351,22 @@ curl -H "Content-Type: application/json" -X POST "http://<IPアドレス>:5000/d
 - cookie は `<プロファイル名>.txt` として保存される。保存先は Docker Compose では `cookies/`、Alpine では `/opt/ytdlpserver/cookies/`（`COOKIE_DIR` で変更可）。
   cookie はパスワードと同じ扱いにし、他人に渡さず、Git にもコミットしない（`cookies/` は `.gitignore` 済み）。
 
+### ブラウザでログインして cookie を保存する（Docker Compose）
+
+ブラウザでログインするだけで、cookie がプロファイルとして保存される。cookies.txt を書き出す必要はない。
+
+1. （推奨）`.env` に `BROWSER_UI_URL=http://<サーバのIPアドレス>:8080` を書いて、起動し直す。
+   401 の `login_url` から、この画面を開けるようになる。
+2. ブラウザで `http://<サーバのIPアドレス>:8080/` を開く（`login_url` を開くと、入力済みで開く）。
+3. プロファイル名と、ログインするサイトの URL を入力し、「ログイン用ブラウザを開く」を押す。
+4. 表示されたブラウザでログインする。CAPTCHA や 2 段階認証もこの画面で操作する。
+5. ログインが終わったら「cookie を保存」を押す。`cookies/<プロファイル名>.txt` に保存される。
+
+- 保存されるのは、入力した URL のサイト（登録ドメイン配下）の cookie だけ。同じプロファイル名で保存すると上書きされる（再ログイン）。
+- 同時に使えるのは 1 件。`SESSION_TIMEOUT`（秒、既定 900）で自動終了する。保存・キャンセル・時間切れのあと、ブラウザとその履歴は破棄される。
+- Google と YouTube のように、複数のドメインにまたがるサイトは保存対象外。
+- 画面（8080）とブラウザ（6080）に認証は無い。LAN 内だけで使い、ポートを外部へ公開しない。Cloudflare Tunnel の対象にも含めない。
+
 ### プロファイルの一覧
 
 ```sh

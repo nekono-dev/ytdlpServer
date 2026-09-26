@@ -6,8 +6,8 @@
 
 | 機能 | 対応アプリ | 備考 |
 |---|---|---|
-| cookie セッション認証（Phase 1: cookie の利用とログイン要求の通知） | api, worker | 検証完了 |
-| cookie セッション認証（Phase 2: ブラウザログインによる cookie 自動取得） | browser, api, worker | 設計済み・実現性検証済み（Step 1）。実装は未着手。[browserServer/design.md](browserServer/design.md) |
+| cookie セッション認証（Phase 1: cookie の利用とログイン要求の通知） | api, worker | 検証完了・コミット済み |
+| cookie セッション認証（Phase 2: ブラウザログインによる cookie 自動取得） | browser, api, worker | 検証完了 |
 
 ## 横断タスク
 

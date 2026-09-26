@@ -161,7 +161,8 @@ def push_jobs(jobs: list[dict]) -> int:
     return len(entries)
 
 def login_required_response(
-        auth_profile: str | None, reason: str) -> tuple[dict, int]:
+        auth_profile: str | None, reason: str, url: str | None = None,
+) -> tuple[dict, int]:
     """ログインが必要なことをユーザへ通知する 401 応答を組み立てる。
 
     reason: cookie_missing(auth_profile 未指定) / profile_unknown(未登録)
@@ -183,7 +184,7 @@ def login_required_response(
         "reason": reason,
         "auth_profile": auth_profile,
         "message": messages[reason],
-        "login_url": cookies.login_url(auth_profile),
+        "login_url": cookies.login_url(auth_profile, url),
     }
     print("WARNING: login required:", reason, "profile:", auth_profile)
     return jsonify(body), 401
@@ -208,14 +209,15 @@ def require_valid_profile(auth_profile: str | None) -> None:
 
 def login_required_from(
         error: cookies.LoginRequiredError,
-        auth_profile: str | None) -> tuple[dict, int]:
+        auth_profile: str | None,
+        url: str | None = None) -> tuple[dict, int]:
     if isinstance(error, ProfileUnavailableError):
-        return login_required_response(auth_profile, error.reason)
+        return login_required_response(auth_profile, error.reason, url)
     # probe 由来: 指定 cookie が効かなかった(失効)か、そもそも未指定
     if auth_profile:
         cookies.mark_expired(redis_client, auth_profile)
-        return login_required_response(auth_profile, "cookie_expired")
-    return login_required_response(None, "cookie_missing")
+        return login_required_response(auth_profile, "cookie_expired", url)
+    return login_required_response(None, "cookie_missing", url)
 
 
 def handle_download(
@@ -230,7 +232,7 @@ def handle_download(
         jobs = probe_jobs(url, options, savedir, namefield, auth_profile)
     except cookies.LoginRequiredError as e:
         # ログイン要求はサーバ不調ではないため、プロセス再起動は行わない
-        return login_required_from(e, auth_profile)
+        return login_required_from(e, auth_profile, url)
     except RuntimeError:
         print("ERROR: yt-dlp probe failed — process exit.")
 

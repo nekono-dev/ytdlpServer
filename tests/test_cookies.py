@@ -24,8 +24,10 @@ class CookiesTest(unittest.TestCase):
 
     def test_api_worker_copies_identical(self) -> None:
         a = (ROOT / "apiServer/src/cookies.py").read_bytes()
-        w = (ROOT / "workerServer/src/cookies.py").read_bytes()
-        self.assertEqual(a, w, "cookies.py は API/Worker で同一に保つこと")
+        for other in ("workerServer", "browserServer"):
+            self.assertEqual(
+                a, (ROOT / other / "src/cookies.py").read_bytes(),
+                f"cookies.py は全アプリで同一に保つこと({other})")
 
     def test_classify(self) -> None:
         for ok in (NICO_ERR, "ERROR: [niconico] sm1: Invalid session, re-login required",
@@ -119,6 +121,32 @@ class CookiesTest(unittest.TestCase):
         self.assertIsNone(self.c.login_url("a"))
         self.c.BROWSER_UI_URL = "http://h:6080"
         self.assertEqual(self.c.login_url("a b"), "http://h:6080/?profile=a%20b")
+
+    def test_login_url_with_start_url(self) -> None:
+        from urllib.parse import parse_qs, urlsplit
+        self.c.BROWSER_UI_URL = "http://h:8080"
+        url = self.c.login_url("nico", "https://www.nicovideo.jp/watch/sm1?x=1#f")
+        q = parse_qs(urlsplit(url).query)
+        self.assertEqual(q, {"profile": ["nico"], "start_url": ["https://www.nicovideo.jp/"]})
+        # プロファイル未指定でも開始 URL は付く。URL が http(s) でなければ付けない
+        self.assertEqual(parse_qs(urlsplit(self.c.login_url(None, "http://a:81/x")).query),
+                         {"start_url": ["http://a:81/"]})
+        self.assertEqual(self.c.login_url(None, "file:///etc/passwd"), "http://h:8080/")
+        self.assertEqual(self.c.login_url("a", "not a url"), "http://h:8080/?profile=a")
+
+    def test_save_profile(self) -> None:
+        dst = self.c.save_profile("nico", b"ONE")
+        self.assertEqual((dst.read_bytes(), oct(dst.stat().st_mode & 0o777)), (b"ONE", "0o600"))
+        # 以前の一時ファイルが緩い権限で残っていても、保存後は 0600 で、一時ファイルは残らない
+        stale = Path(self.dir) / ".nico.txt.tmp"
+        stale.write_bytes(b"x")
+        stale.chmod(0o644)
+        self.c.save_profile("nico", b"TWO")
+        self.assertEqual(dst.read_bytes(), b"TWO")
+        self.assertEqual(oct(dst.stat().st_mode & 0o777), "0o600")
+        self.assertEqual([p.name for p in Path(self.dir).iterdir()], ["nico.txt"])
+        with self.assertRaises(ValueError):
+            self.c.save_profile("../x", b"x")
 
 
 if __name__ == "__main__":

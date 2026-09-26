@@ -26,7 +26,7 @@ flowchart LR
 |---|---|---|
 | apiServer | probe 時に cookie を使う。ログイン要求を 401 で返す | 実装済み（Phase 1） |
 | workerServer | 実行時に cookie を使う。失効を記録し、リトライ対象から外す | 実装済み（Phase 1） |
-| browserServer | ユーザがログインするブラウザを提供し、cookie を回収して保存する | 未着手（Phase 2） |
+| browserServer | ユーザがログインするブラウザを提供し、cookie を回収して保存する | 実装済み（Phase 2） |
 
 ### アプリ間インターフェース: cookie ストア
 
@@ -58,4 +58,4 @@ flowchart LR
 | cookie の登録・ログイン操作を API に置かない | Tunnel で外部に出る API に、セッションの入口を作らないため（R7） |
 | 共有はファイルで行い、Redis に cookie を入れない | Redis は Redis Insight から見えるため（R8） |
 | yt-dlp には一時コピーを渡し、更新分だけ書き戻す | yt-dlp は cookie ファイルを書き換える。並列ジョブで途中状態を読ませないため |
-| `cookies.py` は API と Worker に同一内容で置く | 既存の `with_youtube_defaults` と同じ運用。同一性はテストで確認する |
+| `cookies.py` は 3 アプリに同一内容で置く | 既存の `with_youtube_defaults` と同じ運用。同一性はテストで確認する |

@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
-_NAMES = ("main", "function", "cookies")
+_NAMES = ("main", "function", "cookies", "session", "runtime", "netscape")
 
 
 class FakeRedis:

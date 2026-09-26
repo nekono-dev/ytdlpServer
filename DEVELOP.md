@@ -44,7 +44,8 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 | -------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | [apiServer/](apiServer/)                                                   | API サーバ（Flask + waitress）。`src/main.py`（ルーティング）、`src/function.py`（yt-dlp 解析・ジョブ生成） |
 | [workerServer/](workerServer/)                                             | Worker。`src/main.py`（キュー処理・状態遷移）、`src/function.py`（yt-dlp 実行） |
-| `*/src/cookies.py`                                                         | cookie プロファイルの共通処理（API・Worker で**同一内容**。片方だけ直さない） |
+| `*/src/cookies.py`                                                         | cookie プロファイルの共通処理（API・Worker・browserServer で**同一内容**。一部だけ直さない） |
+| [browserServer/](browserServer/)                                           | ログイン用ブラウザ（Chromium + noVNC）と cookie 回収。`src/main.py`（操作画面・制御 API）、`src/session.py`（状態管理）、`src/runtime.py`（ブラウザ制御）、`src/netscape.py`（cookie の絞り込み・変換） |
 | [tests/](tests/)                                                           | 単体テスト（標準 `unittest`）                                     |
 | [specs/](specs/)                                                           | 要件・設計・タスク（仕様駆動開発）。全体用と、アプリ別（`apiServer/` `workerServer/` `browserServer/`） |
 | `*/yt-dlp.conf`                                                            | イメージ内の `/etc/yt-dlp.conf` になる yt-dlp 共通設定            |
@@ -163,6 +164,15 @@ docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download 
 | SERVER_TTL  | `24`                     | 定期再起動の間隔（時間）。数値以外は 24 になる    |
 | COOKIE_DIR  | `/cookies`               | cookie プロファイルの置き場所（Worker と共有する） |
 | BROWSER_UI_URL | 未設定                | ログイン要求の応答に載せる `login_url` の基準 URL |
+
+### browserServer
+
+| 変数            | 既定値      | 内容                                                  |
+| --------------- | ----------- | ----------------------------------------------------- |
+| PORT            | `8080`      | 操作画面・制御 API のポート                           |
+| NOVNC_PORT      | `6080`      | noVNC のポート（操作画面が iframe で埋め込む）        |
+| SESSION_TIMEOUT | `900`       | ログイン操作の自動終了までの秒数                      |
+| COOKIE_DIR      | `/cookies`  | cookie プロファイルの置き場所                         |
 
 ### Worker
 
@@ -309,7 +319,7 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 ### cookie によるログイン
 
 設計は [specs/design.md](specs/design.md)（全体）、[specs/apiServer/design.md](specs/apiServer/design.md)、[specs/workerServer/design.md](specs/workerServer/design.md) を参照する。
-共通処理は `*/src/cookies.py`（API・Worker で同一内容。**修正するときは両方を揃える**。一致はテストで確認する）。
+共通処理は `*/src/cookies.py`（3 アプリで同一内容。**修正するときは全て揃える**。一致はテストで確認する）。
 
 ### コンテナイメージ
 
@@ -365,22 +375,23 @@ shellcheck -s sh scripts/install-alpine.sh
 
 ## テスト
 
-標準の `unittest` で、Redis やネットワークは不要（Redis は疑似実装、yt-dlp は差し替え）。依存は Flask・redis のみ。
+標準の `unittest` で、Redis やネットワークは不要（Redis は疑似実装、yt-dlp は差し替え）。依存は API・browserServer の `requirements.txt` のとおり。
 
 ```sh
-pip install -r apiServer/requirements.txt   # Flask, redis, waitress
+pip install -r apiServer/requirements.txt -r browserServer/requirements.txt
 python3 -m unittest discover -s tests -v
 ```
 
 - `tests/test_cookies.py`: 共通処理（判定・禁止オプション・書き戻し・状態）。API と Worker の `cookies.py` が同一であることも確認する。
 - `tests/test_api.py` / `tests/test_worker.py`: 401 応答、予約の保持、リトライ除外、ログの伏せ字など。
+- `tests/test_browser.py`: cookie の絞り込み・変換、セッションの状態遷移（排他・タイムアウト・失敗時の破棄）、制御 API。Chromium と CDP は差し替える。
 
 ## Lint
 
-[apiServer/pyproject.toml](apiServer/pyproject.toml) と [workerServer/pyproject.toml](workerServer/pyproject.toml) に ruff の設定がある（`select = ["ALL"]` から一部を除外）。
+[apiServer/pyproject.toml](apiServer/pyproject.toml)・[workerServer/pyproject.toml](workerServer/pyproject.toml)・[browserServer/pyproject.toml](browserServer/pyproject.toml) に ruff の設定がある（`select = ["ALL"]` から一部を除外）。
 
 ```sh
-ruff check apiServer/src workerServer/src
+ruff check apiServer/src workerServer/src browserServer/src
 ```
 
 ## 後片付け
