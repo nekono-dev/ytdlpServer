@@ -315,7 +315,7 @@ iOS ショートカットなどを作成すると楽に操作できる。
 | options   | string | yt-dlp のオプション                                        |
 | savedir   | string | 保存先のサブディレクトリ（指定した場合、作成して保存する） |
 | namefield | string | 保存ファイル名のテンプレート（例: `%(title)s-%(id)s`）     |
-| auth_profile | string | ログインが必要な動画で使う cookie プロファイル名（[ログインが必要な動画](#ログインが必要な動画を取得する)） |
+| auth_profile | string | 使う cookie プロファイル名。省略すると URL のサイトから自動で選ぶ（[ログインが必要な動画](#ログインが必要な動画を取得する)） |
 
 `namefield` は yt-dlp の `%(key)s` 形式で指定する。拡張子は自動で付く。
 
@@ -328,7 +328,7 @@ iOS ショートカットなどを作成すると楽に操作できる。
 | YouTube の音声を日本語にする     | `-f "bestaudio[ext=m4a][language^=ja]"`                |
 | タイトル等を日本語の翻訳にする   | `--extractor-args youtube:lang=ja`（音声は変わらない） |
 | ファイル名の文字化けを防ぐ       | `--windows-filenames`                                  |
-| ログインして取得する             | `options` ではなく `auth_profile` を使う（[後述](#ログインが必要な動画を取得する)） |
+| ログインして取得する             | `options` ではなく cookie プロファイルを使う（[後述](#ログインが必要な動画を取得する)） |
 | 出力形式を mp4 にする            | `--merge-output-format mp4`                            |
 | コーデックを avc1 (mp4) にする   | `-f "bestvideo[vcodec^=avc1][ext=mp4]"`                |
 | 同じファイルを再ダウンロードする | `--force-overwrites`                                   |
@@ -338,18 +338,33 @@ iOS ショートカットなどを作成すると楽に操作できる。
 ## ログインが必要な動画を取得する
 
 一部のサイトは、ユーザ名とパスワードでは yt-dlp からログインできない。
-このサーバは、ログイン済みの **cookie プロファイル** を使って取得する。リクエストの `auth_profile` に、登録済みのプロファイル名を指定する。
+このサーバは、ブラウザでログインしたときの **cookie** を、サイトごとの **プロファイル** として保存しておき、取得に使う。
+
+1. ブラウザでログインして、プロファイルを保存する（[下記](#ブラウザでログインして-cookie-を保存するdocker-compose)）。
+2. いつもどおり `/download` に URL を送る。URL のサイトに対応するプロファイルが保存されていれば、自動で使われる。
+
+| プリセット（最初から選べるサイト） | プロファイル名 | 対象のドメイン |
+| ---------------------------------- | -------------- | -------------- |
+| YouTube                            | `youtube`      | youtube.com, youtu.be, google.com |
+| ニコニコ                           | `niconico`     | nicovideo.jp, nico.ms |
+| Instagram                          | `instagram`    | instagram.com |
+| X (Twitter)                        | `x`            | x.com, twitter.com |
+| Bilibili                           | `bilibili`     | bilibili.com, b23.tv |
+
+それ以外のサイトも、ログイン画面で「新しいサイトを追加」から使える。一度保存すると、次回からプルダウンで選べ、自動選択の対象にもなる。
+
+- 自動で選んだプロファイルの cookie が未保存・失効中でも、ログイン不要の動画は取得できる。
+- 使うプロファイルを明示したい場合は、リクエストに `auth_profile` を指定する（自動選択より優先）。`/schedule` でも指定できる。
 
 ```sh
 curl -H "Content-Type: application/json" -X POST "http://<IPアドレス>:5000/download" \
-  -d '{"url": "https://www.nicovideo.jp/watch/sm00000000", "auth_profile": "nico"}'
+  -d '{"url": "https://www.nicovideo.jp/watch/sm00000000", "auth_profile": "niconico"}'
 ```
 
-- `/schedule` でも同じように `auth_profile` を指定できる。
-- プロファイル名は英数字・`-`・`_`（64 文字まで）。
 - `options` の `-u` / `-p`（`--username` / `--password`）、`--cookies`、`--netrc*` は使えない（400 になる）。
 - cookie は `<プロファイル名>.txt` として保存される。保存先は Docker Compose では `cookies/`、Alpine では `/opt/ytdlpserver/cookies/`（`COOKIE_DIR` で変更可）。
   cookie はパスワードと同じ扱いにし、他人に渡さず、Git にもコミットしない（`cookies/` は `.gitignore` 済み）。
+- ログインには、普段使いとは別のアカウントを使うことを勧める（サイトによっては、別環境での cookie の利用でアカウントが保護・制限されることがある）。
 
 ### ブラウザでログインして cookie を保存する（Docker Compose）
 
@@ -358,17 +373,19 @@ curl -H "Content-Type: application/json" -X POST "http://<IPアドレス>:5000/d
 
 1. （推奨）`.env` に `BROWSER_UI_URL=http://<サーバのIPアドレス>:8080` を書いて、起動し直す。
    401 の `login_url` から、この画面を開けるようになる。
-2. ブラウザで `http://<サーバのIPアドレス>:8080/` を開く（`login_url` を開くと、入力済みで開く）。
-3. プロファイル名と、ログインするサイトの URL を入力し、「ログイン用ブラウザを開く」を押す。
+2. ブラウザで `http://<サーバのIPアドレス>:8080/` を開く（`login_url` を開くと、該当するプロファイルが選ばれた状態で開く）。
+3. プロファイル（サイト）をプルダウンから選び、「ログイン用ブラウザを開く」を押す。
+   - 一覧に無いサイトは「＋ 新しいサイトを追加…」を選び、プロファイル名（英数字・`-`・`_`、64 文字まで）とログイン画面の URL を入力する。
+   - プルダウンの ✓ は保存済み。選ぶと保存日時が表示される。
 4. 表示された画面でログインする。CAPTCHA や 2 段階認証もこの画面で操作する。
    - 入力欄をタップすると、端末のキーボードが出る（⌨ でも開閉できる）。
    - パスワードマネージャの値は「貼付」から送る（入力欄をタップしてから、貼り付けて「送信」）。
    - ← は戻る、↻ は再読み込み。外部アカウントでのログインなどで新しい画面が開くと、表示が切り替わる。
 5. ログインが終わったら「保存」を押す。`cookies/<プロファイル名>.txt` に保存される。
 
-- 保存されるのは、入力した URL のサイト（登録ドメイン配下）の cookie だけ。同じプロファイル名で保存すると上書きされる（再ログイン）。
-- 同時に使えるのは 1 件。`SESSION_TIMEOUT`（秒、既定 900）で自動終了する。保存・キャンセル・時間切れのあと、ブラウザとその履歴は破棄される。
-- Google と YouTube のように、複数のドメインにまたがるサイトは保存対象外。
+- 保存されるのは、そのサイトの対象ドメインの cookie だけ（追加したサイトは、入力した URL の登録ドメイン配下）。同じプロファイルで保存し直すと上書きされる（再ログイン）。
+- 追加したサイトは「削除」で消せる（保存した cookie も消える）。URL を変えたい場合は、削除して追加し直す。プリセットは削除できない。
+- 同時に使えるのは 1 件。`SESSION_TIMEOUT`（秒、既定 900）で自動終了する。保存・中止・時間切れのあと、ブラウザとその履歴は破棄される。
 - 画面（8080）に認証は無い。LAN 内だけで使い、ポートを外部へ公開しない。Cloudflare Tunnel の対象にも含めない。
 
 ### プロファイルの一覧
@@ -377,7 +394,7 @@ curl -H "Content-Type: application/json" -X POST "http://<IPアドレス>:5000/d
 curl "http://<IPアドレス>:5000/auth/profiles"
 ```
 
-`status` は `valid`（有効）か `expired`（失効を検知済み）。cookie の中身は返さない。
+cookie を保存済みのプロファイルの `profile`（名前）・`label`（表示名）・`domains`・`status`・`updated_at`・`login_url` を返す。`status` は `valid`（有効）か `expired`（失効を検知済み）。cookie の中身は返さない。
 
 ### ログインが必要な場合の応答
 
@@ -387,21 +404,22 @@ cookie が未指定・未登録・失効しているときは、リクエスト�
 {
   "error": "login_required",
   "reason": "cookie_expired",
-  "auth_profile": "nico",
-  "message": "auth_profile 'nico' の cookie が無効です。再ログインして cookie を更新してください。",
-  "login_url": null
+  "auth_profile": "niconico",
+  "message": "プロファイル 'niconico' の cookie が無効です。再ログインして cookie を更新してください。",
+  "login_url": "http://<サーバのIPアドレス>:8080/?profile=niconico&start_url=https%3A%2F%2Fwww.nicovideo.jp%2F"
 }
 ```
 
 | 項目        | 内容                                                      |
 | ----------- | --------------------------------------------------------- |
 | reason      | 下表                                                      |
+| auth_profile | 対象のプロファイル（明示指定、または自動で選んだもの）。無ければ `null` |
 | login_url   | 再ログイン用の画面の URL。設定されていなければ `null`    |
 
 | reason            | 意味                                                   |
 | ----------------- | ------------------------------------------------------ |
-| `cookie_missing`  | ログインが必要だが `auth_profile` が指定されていない   |
-| `profile_unknown` | 指定したプロファイルの cookie が保存されていない       |
+| `cookie_missing`  | ログインが必要だが、対応するプロファイルが無い（新しいサイトとして追加する） |
+| `profile_unknown` | プロファイルの cookie が保存されていない               |
 | `cookie_expired`  | cookie が失効している                                  |
 
 - cookie を更新すると、サーバを再起動しなくても `valid` に戻る。
@@ -414,7 +432,7 @@ cookie が未指定・未登録・失効しているときは、リクエスト�
 
 ### `login_required`（HTTP 401）が返る
 
-指定した `auth_profile` の cookie が未保存または失効している。[ログインが必要な場合の応答](#ログインが必要な場合の応答)の `reason` を確認し、再ログインして cookie を更新する。
+プロファイルの cookie が未保存または失効している。[ログインが必要な場合の応答](#ログインが必要な場合の応答)の `login_url` を開き、ログインして保存し直す。
 
 ### `yt-dlp probe failed; wait restart yt-dlp.` が返る
 

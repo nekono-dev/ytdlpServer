@@ -44,7 +44,7 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 | -------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | [apiServer/](apiServer/)                                                   | API サーバ（Flask + waitress）。`src/main.py`（ルーティング）、`src/function.py`（yt-dlp 解析・ジョブ生成） |
 | [workerServer/](workerServer/)                                             | Worker。`src/main.py`（キュー処理・状態遷移）、`src/function.py`（yt-dlp 実行） |
-| `*/src/cookies.py`                                                         | cookie プロファイルの共通処理（API・Worker・browserServer で**同一内容**。一部だけ直さない） |
+| `*/src/cookies.py`・`*/src/presets.json`                                   | cookie プロファイルの共通処理と、プリセットの定義（API・Worker・browserServer で**同一内容**。一部だけ直さない） |
 | [browserServer/](browserServer/)                                           | ログイン用ブラウザ（Chromium、画面は CDP で配信）と cookie 回収。`src/main.py`（操作画面・制御 API・WebSocket、aiohttp）、`src/session.py`（状態管理）、`src/browser.py`（ブラウザ制御・画面配信・入力）、`src/netscape.py`（cookie の絞り込み・変換） |
 | [tests/](tests/)                                                           | 単体テスト（標準 `unittest`）                                     |
 | [specs/](specs/)                                                           | 要件・設計・タスク（仕様駆動開発）。全体用と、アプリ別（`apiServer/` `workerServer/` `browserServer/`） |
@@ -196,7 +196,7 @@ docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download 
 | GET      | `/schedule`          | 保存済みリクエストの一覧（`options` は含めない）                         |
 | POST     | `/download/scheduled`| 保存済みリクエストを解析してキューへ積む。`{"count": N \| "all"}`（省略時は all） |
 | POST     | `/download/retry`    | 失敗ジョブの `failed_count` を 0 に戻し、Worker が再試行できるようにする |
-| GET      | `/auth/profiles`     | cookie プロファイルの名前・状態・更新時刻の一覧（cookie の中身は返さない） |
+| GET      | `/auth/profiles`     | cookie を保存済みのプロファイルの名前・表示名・対象ドメイン・状態・更新時刻の一覧（cookie の中身は返さない） |
 
 ### リクエスト項目（`/download`・`/schedule`）
 
@@ -206,7 +206,7 @@ docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download 
 | options   | string | 任意 | yt-dlp のオプション。空白区切りで分割して配列化する（引用符は解釈しない）|
 | savedir   | string | 任意 | 保存先のサブディレクトリ                                                 |
 | namefield | string | 任意 | ファイル名テンプレート（`%(key)s` 形式）。空白のみは未指定扱い           |
-| auth_profile | string | 任意 | cookie プロファイル名（`[A-Za-z0-9_-]{1,64}`）。空文字は未指定扱い |
+| auth_profile | string | 任意 | cookie プロファイル名（`[A-Za-z0-9_-]{1,64}`）。空文字は未指定扱い。省略時は URL のサイトから自動で選ぶ |
 
 - `options` が文字列以外だと 400（`Invalid request.`）になる。
 - `options` に `--cookies` / `--cookies-from-browser` / `-u` `--username` / `-p` `--password` / `--twofactor` / `-n` `--netrc*` を含むと 400（該当オプション名を `message` に返す）。
@@ -318,7 +318,7 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 ### cookie によるログイン
 
 設計は [specs/design.md](specs/design.md)（全体）、[specs/apiServer/design.md](specs/apiServer/design.md)、[specs/workerServer/design.md](specs/workerServer/design.md) を参照する。
-共通処理は `*/src/cookies.py`（3 アプリで同一内容。**修正するときは全て揃える**。一致はテストで確認する）。
+共通処理は `*/src/cookies.py`、プリセットの定義は `*/src/presets.json`（どちらも 3 アプリで同一内容。**修正するときは全て揃える**。一致はテストで確認する）。ユーザが追加したサイトは `COOKIE_DIR/profiles.json` に保存される。
 
 ### コンテナイメージ
 
@@ -381,7 +381,7 @@ pip install -r apiServer/requirements.txt -r browserServer/requirements.txt
 python3 -m unittest discover -s tests -v
 ```
 
-- `tests/test_cookies.py`: 共通処理（判定・禁止オプション・書き戻し・状態）。API と Worker の `cookies.py` が同一であることも確認する。
+- `tests/test_cookies.py`: 共通処理（判定・禁止オプション・書き戻し・状態・プロファイルの定義と解決・履歴）。3 アプリの `cookies.py` と `presets.json` が同一であることも確認する。
 - `tests/test_api.py` / `tests/test_worker.py`: 401 応答、予約の保持、リトライ除外、ログの伏せ字など。
 - `tests/test_browser.py`: cookie の絞り込み・変換、入力の CDP への変換、セッションの状態遷移（排他・タイムアウト・失敗時の破棄）、制御 API と WebSocket。Chromium と CDP は差し替える。
 

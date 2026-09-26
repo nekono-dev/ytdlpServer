@@ -18,15 +18,13 @@ def site_domain(start_url: str) -> str:
     return _EXTRACT(host).top_domain_under_public_suffix or host
 
 
-def filter_cookies(cookies: list[dict], start_url: str) -> list[dict]:
-    """cookie のドメインが登録ドメインと同じか、その配下のものだけを残す。"""
-    base = site_domain(start_url)
-    if not base:
-        return []
+def filter_cookies(cookies: list[dict], domains: list[str]) -> list[dict]:
+    """cookie のドメインが、domains のいずれかと同じか、その配下のものだけを残す。"""
+    bases = [d.lower().lstrip(".") for d in domains if d]
     kept: list[dict] = []
     for c in cookies:
         domain = str(c.get("domain", "")).lstrip(".").lower()
-        if domain == base or domain.endswith(f".{base}"):
+        if any(domain == b or domain.endswith(f".{b}") for b in bases):
             kept.append(c)
     return kept
 

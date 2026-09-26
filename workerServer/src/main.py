@@ -141,7 +141,9 @@ def record_failure(
         "login_url": ""}
     if cookies.classify_login_required(output):
         extra["error_code"] = "login_required"
-        extra["login_url"] = cookies.login_url(auth_profile, url) or ""
+        # プロファイルの無いジョブは、URL に対応するプロファイルへ案内する
+        profile = auth_profile or cookies.resolve_profile(url)
+        extra["login_url"] = cookies.login_url(profile, url) or ""
         if auth_profile:
             cookies.mark_expired(redis_client, auth_profile)
         print("WARNING: login required. profile:", auth_profile or "(none)")

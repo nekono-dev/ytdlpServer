@@ -80,6 +80,14 @@ class WorkerTest(unittest.TestCase):
         q = parse_qs(urlsplit(self.redis.hgetall(new)["login_url"]).query)
         self.assertEqual(q, {"profile": ["nico"], "start_url": ["https://www.nicovideo.jp/"]})
 
+    def test_record_failure_login_url_resolves_profile(self) -> None:
+        from urllib.parse import parse_qs, urlsplit
+        self.c.BROWSER_UI_URL = "http://h:8080"
+        key = self.make_failed("j4")
+        new = self.m.record_failure(key, None, LOGIN_ERR, "https://x.com/a/status/1")
+        q = parse_qs(urlsplit(self.redis.hgetall(new)["login_url"]).query)
+        self.assertEqual(q["profile"], ["x"])
+
     def test_record_failure_other_error_clears_code(self) -> None:
         key = self.make_failed("j2", auth_profile="nico", error_code="login_required")
         new = self.m.record_failure(key, "nico", "HTTP Error 500")

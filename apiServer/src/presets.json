@@ -1,0 +1,34 @@
+{
+  "presets": [
+    {
+      "name": "youtube",
+      "label": "YouTube",
+      "start_url": "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2F",
+      "domains": ["youtube.com", "youtu.be", "google.com"]
+    },
+    {
+      "name": "niconico",
+      "label": "ニコニコ",
+      "start_url": "https://account.nicovideo.jp/login",
+      "domains": ["nicovideo.jp", "nico.ms"]
+    },
+    {
+      "name": "instagram",
+      "label": "Instagram",
+      "start_url": "https://www.instagram.com/accounts/login/",
+      "domains": ["instagram.com"]
+    },
+    {
+      "name": "x",
+      "label": "X (Twitter)",
+      "start_url": "https://x.com/i/flow/login",
+      "domains": ["x.com", "twitter.com"]
+    },
+    {
+      "name": "bilibili",
+      "label": "Bilibili",
+      "start_url": "https://passport.bilibili.com/login",
+      "domains": ["bilibili.com", "b23.tv"]
+    }
+  ]
+}

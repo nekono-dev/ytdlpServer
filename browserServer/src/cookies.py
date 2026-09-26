@@ -10,6 +10,7 @@ yt-dlp は cookie ファイルへ書き戻すため、実行時は一時コピ�
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import re
 import tempfile
@@ -26,6 +27,9 @@ if TYPE_CHECKING:
 COOKIE_DIR = Path(os.environ.get("COOKIE_DIR", "/cookies"))
 BROWSER_UI_URL = os.environ.get("BROWSER_UI_URL", "").rstrip("/")
 PROFILE_KEY_PREFIX = "ytdlp:auth:profile"
+# プロファイルの定義: プリセット(リポジトリ同梱、3 アプリ同一)と、履歴(cookie ストア内)
+PRESETS_FILE = Path(__file__).with_name("presets.json")
+HISTORY_FILE_NAME = "profiles.json"
 PROFILE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 # ログイン情報・cookie をユーザ指定の options で上書き/参照されないよう拒否する。
@@ -195,12 +199,16 @@ def list_profiles(client: Redis | None) -> list[dict]:
     if not COOKIE_DIR.is_dir():
         return []
     results: list[dict] = []
+    entries = {e["name"]: e for e in profile_entries()}
     for path in sorted(COOKIE_DIR.glob("*.txt")):
         name = path.stem
         if not PROFILE_PATTERN.match(name):
             continue
+        entry = entries.get(name)
         results.append({
             "profile": name,
+            "label": entry["label"] if entry else name,
+            "domains": entry["domains"] if entry else [],
             "status": profile_state(client, name),
             "updated_at": path.stat().st_mtime,
             "login_url": login_url(name),
@@ -223,3 +231,113 @@ def login_url(profile: str | None, url: str | None = None) -> str | None:
         params["start_url"] = f"{parts.scheme}://{parts.netloc}/"
     query = urlencode(params, quote_via=quote)
     return f"{BROWSER_UI_URL}/?{query}" if query else f"{BROWSER_UI_URL}/"
+
+
+# ---- プロファイルの定義(プリセット・履歴) ----------------------------------
+
+def _entry(raw: object, *, preset: bool) -> dict | None:
+    """定義 1 件を検証して正規化する。不正なものは None。"""
+    if not isinstance(raw, dict):
+        return None
+    name = raw.get("name")
+    start_url, domains = raw.get("start_url"), raw.get("domains")
+    if not isinstance(name, str) or not PROFILE_PATTERN.match(name):
+        return None
+    if not isinstance(start_url, str) or urlsplit(start_url).scheme not in (
+            "http", "https"):
+        return None
+    if not isinstance(domains, list) or not domains or not all(
+            isinstance(d, str) and d for d in domains):
+        return None
+    label = raw.get("label") if isinstance(raw.get("label"), str) else name
+    return {"name": name, "label": label, "start_url": start_url,
+            "domains": [d.lower().lstrip(".") for d in domains], "preset": preset}
+
+
+def _read_entries(path: Path, *, preset: bool) -> list[dict]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as e:
+        print("WARNING: failed to read profile definitions:", path, e)
+        return []
+    items = data.get("profiles" if not preset else "presets", []) if isinstance(
+        data, dict) else []
+    return [e for e in (_entry(x, preset=preset) for x in items) if e]
+
+
+def load_presets() -> list[dict]:
+    return _read_entries(PRESETS_FILE, preset=True)
+
+
+def load_history() -> list[dict]:
+    return _read_entries(COOKIE_DIR / HISTORY_FILE_NAME, preset=False)
+
+
+def profile_entries() -> list[dict]:
+    """プリセット(定義順)→ 履歴(追加順)。履歴のうちプリセットと同名のものは除く。"""
+    presets = load_presets()
+    names = {e["name"] for e in presets}
+    return presets + [e for e in load_history() if e["name"] not in names]
+
+
+def find_entry(name: object) -> dict | None:
+    return next((e for e in profile_entries() if e["name"] == name), None)
+
+
+def host_matches(host: str, domains: list[str]) -> bool:
+    host = host.lower().rstrip(".")
+    return any(host == d or host.endswith(f".{d}") for d in domains)
+
+
+def resolve_profile(url: str | None) -> str | None:
+    """URL のサイトに対応するプロファイル名。無ければ None。"""
+    host = urlsplit(url or "").hostname
+    if not host:
+        return None
+    return next((e["name"] for e in profile_entries()
+                 if host_matches(host, e["domains"])), None)
+
+
+def _write_history(entries: list[dict]) -> None:
+    data = {"profiles": [
+        {k: e[k] for k in ("name", "label", "start_url", "domains")}
+        for e in entries]}
+    dst = COOKIE_DIR / HISTORY_FILE_NAME
+    COOKIE_DIR.mkdir(parents=True, exist_ok=True)
+    staging = dst.with_name(f".{dst.name}.tmp")
+    fd = os.open(staging, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    staging.chmod(0o600)
+    staging.replace(dst)
+
+
+def add_history(name: str, start_url: str, domains: list[str]) -> dict:
+    """新しいサイトの定義を履歴に追加する。同名の定義があれば ValueError。"""
+    entry = _entry({"name": name, "label": name, "start_url": start_url,
+                    "domains": domains}, preset=False)
+    if not entry:
+        msg = "invalid profile definition"
+        raise ValueError(msg)
+    if find_entry(name):
+        msg = f"profile '{name}' already exists"
+        raise ValueError(msg)
+    _write_history([*load_history(), entry])
+    return entry
+
+
+def remove_history(name: str) -> None:
+    """履歴を削除し、その cookie も削除する。
+
+    プリセットは ValueError、履歴に無ければ KeyError。
+    """
+    if any(e["name"] == name for e in load_presets()):
+        msg = "preset profiles cannot be removed"
+        raise ValueError(msg)
+    history = load_history()
+    if not any(e["name"] == name for e in history):
+        raise KeyError(name)
+    _write_history([e for e in history if e["name"] != name])
+    cookie_path(name).unlink(missing_ok=True)

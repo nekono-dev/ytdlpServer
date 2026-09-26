@@ -23,11 +23,12 @@ class CookiesTest(unittest.TestCase):
         return p
 
     def test_api_worker_copies_identical(self) -> None:
-        a = (ROOT / "apiServer/src/cookies.py").read_bytes()
-        for other in ("workerServer", "browserServer"):
-            self.assertEqual(
-                a, (ROOT / other / "src/cookies.py").read_bytes(),
-                f"cookies.py は全アプリで同一に保つこと({other})")
+        for name in ("cookies.py", "presets.json"):
+            a = (ROOT / "apiServer/src" / name).read_bytes()
+            for other in ("workerServer", "browserServer"):
+                self.assertEqual(
+                    a, (ROOT / other / "src" / name).read_bytes(),
+                    f"{name} は全アプリで同一に保つこと({other})")
 
     def test_classify(self) -> None:
         for ok in (NICO_ERR, "ERROR: [niconico] sm1: Invalid session, re-login required",
@@ -147,6 +148,77 @@ class CookiesTest(unittest.TestCase):
         self.assertEqual([p.name for p in Path(self.dir).iterdir()], ["nico.txt"])
         with self.assertRaises(ValueError):
             self.c.save_profile("../x", b"x")
+
+
+class ProfileEntriesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dir = tempfile.mkdtemp()
+        self.c = load_service("apiServer", self.dir).cookies
+
+    def test_presets(self) -> None:
+        names = [e["name"] for e in self.c.load_presets()]
+        self.assertEqual(names, ["youtube", "niconico", "instagram", "x", "bilibili"])
+        for e in self.c.load_presets():
+            self.assertTrue(e["preset"])
+            self.assertTrue(e["start_url"].startswith("https://"), e)
+            # 開始 URL のホストは、保存対象のドメインに含まれる(ログイン画面の cookie も保存する)
+            from urllib.parse import urlsplit
+            host = urlsplit(e["start_url"]).hostname
+            self.assertTrue(self.c.host_matches(host, e["domains"]), e)
+
+    def test_resolve_profile(self) -> None:
+        for url, want in (("https://www.youtube.com/watch?v=x", "youtube"),
+                          ("https://youtu.be/x", "youtube"),
+                          ("https://m.youtube.com/shorts/x", "youtube"),
+                          ("https://www.nicovideo.jp/watch/sm9", "niconico"),
+                          ("https://nico.ms/sm9", "niconico"),
+                          ("https://twitter.com/a/status/1", "x"),
+                          ("https://x.com/a/status/1", "x"),
+                          ("https://www.instagram.com/reel/x/", "instagram"),
+                          ("https://www.bilibili.com/video/BV1", "bilibili"),
+                          ("https://vimeo.com/1", None),
+                          ("https://notyoutube.com/", None),
+                          ("not a url", None), (None, None)):
+            self.assertEqual(self.c.resolve_profile(url), want, url)
+
+    def test_history_add_resolve_remove(self) -> None:
+        e = self.c.add_history("vimeo", "https://vimeo.com/log_in", ["vimeo.com"])
+        self.assertEqual((e["label"], e["preset"]), ("vimeo", False))
+        hist = Path(self.dir) / "profiles.json"
+        self.assertEqual(oct(hist.stat().st_mode & 0o777), "0o600")
+        self.assertEqual(self.c.resolve_profile("https://player.vimeo.com/video/1"), "vimeo")
+        self.assertEqual([x["name"] for x in self.c.profile_entries()][-1], "vimeo")
+        # 同名(プリセット・履歴)は追加できない
+        for name in ("vimeo", "youtube"):
+            with self.assertRaises(ValueError):
+                self.c.add_history(name, "https://a.example/", ["a.example"])
+        with self.assertRaises(ValueError):
+            self.c.add_history("bad", "ftp://a/", ["a"])
+        # 削除すると cookie も消える。プリセットは削除できない
+        (Path(self.dir) / "vimeo.txt").write_text("x")
+        self.c.remove_history("vimeo")
+        self.assertFalse((Path(self.dir) / "vimeo.txt").exists())
+        self.assertIsNone(self.c.resolve_profile("https://vimeo.com/1"))
+        with self.assertRaises(KeyError):
+            self.c.remove_history("vimeo")
+        with self.assertRaises(ValueError):
+            self.c.remove_history("youtube")
+        self.assertEqual([p.name for p in Path(self.dir).iterdir()], ["profiles.json"])
+
+    def test_broken_history_is_ignored(self) -> None:
+        (Path(self.dir) / "profiles.json").write_text("{broken")
+        self.assertEqual(len(self.c.profile_entries()), 5)
+        (Path(self.dir) / "profiles.json").write_text(
+            '{"profiles": [{"name": "../x", "start_url": "https://a/", "domains": ["a"]},'
+            ' {"name": "ok", "start_url": "https://b.example/", "domains": ["b.example"]}]}')
+        self.assertEqual([e["name"] for e in self.c.load_history()], ["ok"])
+
+    def test_list_profiles_has_label(self) -> None:
+        (Path(self.dir) / "niconico.txt").write_text("x")
+        (Path(self.dir) / "legacy.txt").write_text("x")
+        res = {r["profile"]: r for r in self.c.list_profiles(None)}
+        self.assertEqual((res["niconico"]["label"], res["niconico"]["domains"][0]), ("ニコニコ", "nicovideo.jp"))
+        self.assertEqual((res["legacy"]["label"], res["legacy"]["domains"]), ("legacy", []))
 
 
 if __name__ == "__main__":

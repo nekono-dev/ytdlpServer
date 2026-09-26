@@ -40,10 +40,19 @@
 <section id="form">
   <h1>ブラウザでログイン</h1>
   <p class="hint">サーバ上のブラウザで、ログインするサイトを開きます。ログインが終わったら「保存」を押すと、cookie がプロファイルとして保存されます。</p>
-  <label for="profile">プロファイル名（英数字・-・_）</label>
-  <input id="profile" autocomplete="off" placeholder="例: nico">
-  <label for="start_url">開始 URL（ログインするサイト）</label>
-  <input id="start_url" autocomplete="off" inputmode="url" placeholder="例: https://account.nicovideo.jp/login">
+  <label for="profile">プロファイル（サイト）</label>
+  <div style="display:flex; gap:6px">
+    <select id="profile" style="flex:1"></select>
+    <button id="remove" hidden title="この履歴と cookie を削除">削除</button>
+  </div>
+  <div id="pinfo" class="hint"></div>
+  <div id="newsite" hidden>
+    <label for="newname">プロファイル名（英数字・-・_）</label>
+    <input id="newname" autocomplete="off" autocapitalize="off" placeholder="例: vimeo">
+    <label for="start_url">開始 URL（ログインするサイト）</label>
+    <input id="start_url" autocomplete="off" autocapitalize="off" inputmode="url" placeholder="例: https://vimeo.com/log_in">
+    <div class="hint">保存に成功すると、次回からプルダウンで選べます。</div>
+  </div>
   <p><button id="start" class="primary">ログイン用ブラウザを開く</button></p>
   <div id="msg0" class="msg" role="status"></div>
 </section>
@@ -238,11 +247,50 @@ function render(s) {
   state = s.state;
 }
 async function refresh() { try { render(await api("GET", "/session")); } catch (e) { say(e.message, "err"); } }
+// ---- プロファイルの選択(プリセット・履歴・新しいサイト) ----
+const NEW = "__new__";
+let profiles = [];
+function fmtDate(t) { const d = new Date(t * 1000); return (d.getMonth() + 1) + "/" + d.getDate() + " " + String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0"); }
+function selected() { return profiles.find(p => p.name === $("profile").value); }
+function renderProfiles(keep) {
+  const sel = $("profile"); sel.textContent = "";
+  const groups = [["プリセット", profiles.filter(p => p.preset)], ["追加したサイト", profiles.filter(p => !p.preset)]];
+  for (const [label, items] of groups) {
+    if (!items.length) continue;
+    const g = document.createElement("optgroup"); g.label = label;
+    for (const p of items) {
+      const o = document.createElement("option"); o.value = p.name;
+      o.textContent = p.label + (p.preset || p.label === p.name ? "" : "（" + p.name + "）") + (p.saved_at ? " ✓" : "");
+      g.appendChild(o);
+    }
+    sel.appendChild(g);
+  }
+  const o = document.createElement("option"); o.value = NEW; o.textContent = "＋ 新しいサイトを追加…"; sel.appendChild(o);
+  if (keep && [...sel.options].some(x => x.value === keep)) sel.value = keep;
+  onProfileChange();
+}
+function onProfileChange() {
+  const p = selected(), isNew = $("profile").value === NEW;
+  $("newsite").hidden = !isNew;
+  $("remove").hidden = !p || p.preset;
+  $("pinfo").textContent = p ? (p.saved_at ? "保存済み（" + fmtDate(p.saved_at) + "）" : "未保存") + "　" + p.domains.join(", ") : "";
+}
+$("profile").onchange = onProfileChange;
+async function loadProfiles(keep) { profiles = await api("GET", "/profiles"); renderProfiles(keep); }
+$("remove").onclick = async () => {
+  const p = selected(); if (!p) return;
+  if (!confirm("「" + p.name + "」の履歴と、保存した cookie を削除します。よろしいですか？")) return;
+  try { await api("DELETE", "/profiles/" + encodeURIComponent(p.name)); say("削除しました。"); } catch (e) { say(e.message, "err"); }
+  loadProfiles();
+};
 $("start").onclick = async () => {
   say("");
+  const isNew = $("profile").value === NEW;
+  const body = isNew ? { profile: $("newname").value.trim(), start_url: $("start_url").value.trim(), mobile: MOBILE }
+                     : { profile: $("profile").value, mobile: MOBILE };
   try {
     $("start").disabled = true;
-    render(await api("POST", "/session", { profile: $("profile").value.trim(), start_url: $("start_url").value.trim(), mobile: MOBILE }));
+    render(await api("POST", "/session", body));
   } catch (e) { say(e.message, "err"); } finally { $("start").disabled = false; }
 };
 $("commit").onclick = async () => {
@@ -251,6 +299,7 @@ $("commit").onclick = async () => {
     $("commit").disabled = true;
     const r = await api("POST", "/session/commit");
     say("保存しました（" + r.domains.join(", ") + " の cookie " + r.saved + " 件）。プロファイル “" + r.profile + "” が使えます。", "ok");
+    loadProfiles(r.profile).catch(() => {});
   } catch (e) { say(e.message, "err"); }
   refresh();
 };
@@ -261,9 +310,18 @@ $("cancel").onclick = async () => {
 $("back").onclick = () => send({ type: "nav", action: "back" });
 $("reload").onclick = () => send({ type: "nav", action: "reload" });
 
+// login_url から開いた場合: 既知のプロファイルなら選択し、未知なら新しいサイトの欄に入れる
 const q = new URLSearchParams(location.search);
-if (q.get("profile")) $("profile").value = q.get("profile");
-if (q.get("start_url")) $("start_url").value = q.get("start_url");
+loadProfiles().then(() => {
+  const name = q.get("profile"), url = q.get("start_url");
+  if (name && profiles.some(p => p.name === name)) { $("profile").value = name; }
+  else if (name || url) {
+    $("profile").value = NEW;
+    if (name) $("newname").value = name;
+    if (url) $("start_url").value = url;
+  }
+  onProfileChange();
+}).catch((e) => say(e.message, "err"));
 refresh(); setInterval(refresh, 2000);
 </script>
 </body>

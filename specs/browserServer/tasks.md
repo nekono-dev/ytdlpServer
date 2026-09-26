@@ -72,13 +72,20 @@
 - 実装中に判明し対処した事項: ナビゲーション中の画面配信の開始失敗（再試行と読み込み完了時の再開）、終了後の子プロセスによるプロファイルの残骸（プロセスグループでの終了、TMPDIR、削除の再試行）。
 既知の未検証事項: 製品版での実スマートフォンの操作（PoC で確認した方式と同じ）、iOS でのキーボードの自動表示。
 
-## cookie セッション認証（Phase 4: プロファイルのプリセットと履歴、未着手）
+## cookie セッション認証（Phase 4: プロファイルのプリセットと履歴、検証完了）
 
 設計は [design.md](design.md)。
 
-- [ ] `GET /profiles`、`DELETE /profiles/{name}`、`POST /session` のプロファイル解決
-- [ ] 保存時の `domains` による絞り込み（複数ドメイン）と、新しいサイトの履歴への追加
-- [ ] 操作画面のプルダウン（プリセット・履歴・新しいサイト、保存状況、削除）と `login_url` の反映
-- [ ] 単体テスト
-- [ ] README・DEVELOP.md を更新
-- [ ] 実機検証（プリセットの保存、YouTube の複数ドメイン、履歴の追加・削除、API の自動選択）
+- [x] `GET /profiles`、`DELETE /profiles/{name}`、`POST /session` のプロファイル解決
+- [x] 保存時の `domains` による絞り込み（複数ドメイン）と、新しいサイトの履歴への追加
+- [x] 操作画面のプルダウン（プリセット・履歴・新しいサイト、保存状況、削除）と `login_url` の反映
+- [x] 単体テスト
+- [x] README・DEVELOP.md を更新
+- [x] 実機検証
+
+検証: 検証サーバ（Ubuntu 24.04、Docker Compose）で、api・worker・browser を起動して実施。
+- ブラウザ側: プリセットのニコニコ・YouTube は定義の開始 URL で開き、対象ドメインの cookie だけを保存（YouTube は google.com を含む複数ドメイン）。新しいサイト（モック）は保存時だけ履歴に追加され、次回はプロファイル名だけで開ける。履歴の削除で cookie も消え、プリセットの削除は 400。
+- API の自動選択: 履歴のサイトの URL を `auth_profile` なしで送ると自動で使って取得。ニコニコのログイン必須動画は、未ログインの cookie を自動で使って 401 `cookie_expired`（`login_url` は `?profile=niconico`）、失効中は cookie なしで解析して同じ 401、公開動画は失効中でも取得（3MB）。プリセットはあるが未保存の Instagram は 401 `profile_unknown`。
+- 画面: `login_url` の既知プロファイルは選択済み、未知のサイトは「新しいサイトを追加」に URL が入った状態で開く。
+- 単体テストは全体で 74 件成功。
+既知の未検証事項: 実アカウントでの YouTube・Instagram・X・Bilibili のログインと、その cookie での取得（人手のログインが必要）。

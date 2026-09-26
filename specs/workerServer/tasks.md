@@ -26,9 +26,11 @@
 
 検証: 単体テスト。実機では、キュー投入後に失効したジョブの `login_url` は未確認（API 側の 401 と同じ組み立てを共用）。
 
-## cookie セッション認証（Phase 4、未着手）
+## cookie セッション認証（Phase 4、検証完了）
 
 設計は [design.md](design.md)。
 
-- [ ] `record_failure` で、`auth_profile` の無いジョブの `login_url` にプロファイルを使う
-- [ ] 単体テスト
+- [x] `record_failure` で、`auth_profile` の無いジョブの `login_url` にプロファイルを使う
+- [x] 単体テスト
+
+検証: 単体テスト。自動選択されたプロファイルがジョブ hash の `auth_profile` に入ることを実機で確認（`ytdlp:jobs:completed:auto` の `auth_profile=mockhist`）。

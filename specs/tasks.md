@@ -9,7 +9,7 @@
 | cookie セッション認証（Phase 1: cookie の利用とログイン要求の通知） | api, worker | 検証完了・コミット済み |
 | cookie セッション認証（Phase 2: ブラウザログインによる cookie 自動取得） | browser, api, worker | 検証完了 |
 | cookie セッション認証（Phase 3: 画面配信方式への置き換え） | browser | 検証完了。製品版での実スマートフォン操作は未確認 |
-| cookie セッション認証（Phase 4: プロファイルのプリセット・履歴・自動選択） | browser, api, worker | 未着手 |
+| cookie セッション認証（Phase 4: プロファイルのプリセット・履歴・自動選択） | browser, api, worker | 検証完了。実アカウントでの YouTube・Instagram・X・Bilibili は未確認 |
 
 ## 横断タスク
 

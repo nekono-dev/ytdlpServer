@@ -173,10 +173,10 @@ def login_required_response(
             "ログインが必要なコンテンツです。cookie でログインしたプロファイルを "
             "auth_profile に指定してください。"),
         "profile_unknown": (
-            f"auth_profile '{auth_profile}' の cookie が登録されていません。"
+            f"プロファイル '{auth_profile}' の cookie が登録されていません。"
             "ログインして cookie を登録してください。"),
         "cookie_expired": (
-            f"auth_profile '{auth_profile}' の cookie が無効です。"
+            f"プロファイル '{auth_profile}' の cookie が無効です。"
             "再ログインして cookie を更新してください。"),
     }
     body = {
@@ -207,16 +207,37 @@ def require_valid_profile(auth_profile: str | None) -> None:
         raise ProfileUnavailableError(reason)
 
 
+def select_profile(
+        url: str, auth_profile: str | None) -> tuple[str | None, str | None]:
+    """使うプロファイルと、ログイン要求時に案内する候補を返す。
+
+    明示指定があればそれを使う。無ければ URL に対応するプロファイルを探し、
+    cookie が有効なら使う。未保存・失効中なら cookie なしで解析し、候補として返す
+    (ログイン不要のコンテンツは従来どおり取得できるようにするため)。
+    """
+    if auth_profile:
+        return auth_profile, None
+    candidate = cookies.resolve_profile(url)
+    if candidate and cookies.profile_state(redis_client, candidate) == "valid":
+        return candidate, None
+    return None, candidate
+
+
 def login_required_from(
         error: cookies.LoginRequiredError,
         auth_profile: str | None,
-        url: str | None = None) -> tuple[dict, int]:
+        url: str | None = None,
+        candidate: str | None = None) -> tuple[dict, int]:
     if isinstance(error, ProfileUnavailableError):
         return login_required_response(auth_profile, error.reason, url)
-    # probe 由来: 指定 cookie が効かなかった(失効)か、そもそも未指定
+    # probe 由来: 使った cookie が効かなかった(失効)か、そもそも使っていない
     if auth_profile:
         cookies.mark_expired(redis_client, auth_profile)
         return login_required_response(auth_profile, "cookie_expired", url)
+    if candidate:
+        state = cookies.profile_state(redis_client, candidate)
+        reason = "profile_unknown" if state == "missing" else "cookie_expired"
+        return login_required_response(candidate, reason, url)
     return login_required_response(None, "cookie_missing", url)
 
 
@@ -227,12 +248,13 @@ def handle_download(
         namefield: str | None,
         auth_profile: str | None = None) -> tuple[dict, int]:
     jobs: list[dict] = []
+    profile, candidate = select_profile(url, auth_profile)
     try:
         require_valid_profile(auth_profile)
-        jobs = probe_jobs(url, options, savedir, namefield, auth_profile)
+        jobs = probe_jobs(url, options, savedir, namefield, profile)
     except cookies.LoginRequiredError as e:
         # ログイン要求はサーバ不調ではないため、プロセス再起動は行わない
-        return login_required_from(e, auth_profile, url)
+        return login_required_from(e, profile, url, candidate)
     except RuntimeError:
         print("ERROR: yt-dlp probe failed — process exit.")
 

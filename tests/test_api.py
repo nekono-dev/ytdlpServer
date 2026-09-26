@@ -74,6 +74,57 @@ class ApiTest(unittest.TestCase):
         r = self.client.get("/auth/profiles")
         self.assertEqual(r.json[0]["login_url"], "http://h:8080/?profile=nico")
 
+    def post_url(self, url: str, **body: object):  # noqa: ANN202
+        return self.client.post("/download", json={"url": url, **body})
+
+    def test_auto_select_valid_profile(self) -> None:
+        (Path(self.dir) / "niconico.txt").write_bytes(b"# Netscape\n")
+        job = {"id": "a", "url": "u", "options": []}
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", return_value=[job]) as probe:
+            r = self.post_url("https://www.nicovideo.jp/watch/sm9")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(probe.call_args.args[4], "niconico")
+        # 明示指定が優先される
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", return_value=[job]) as probe:
+            self.post_url("https://www.nicovideo.jp/watch/sm9", auth_profile="nico")
+        self.assertEqual(probe.call_args.args[4], "nico")
+
+    def test_auto_select_missing_or_expired_probes_without_cookie(self) -> None:
+        job = {"id": "a", "url": "u", "options": []}
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", return_value=[job]) as probe:
+            r = self.post_url("https://www.nicovideo.jp/watch/sm9")   # 未保存
+        self.assertEqual((r.status_code, probe.call_args.args[4]), (200, None))
+        (Path(self.dir) / "niconico.txt").write_bytes(b"x")
+        os.utime(Path(self.dir) / "niconico.txt", (1000, 1000))
+        self.c.mark_expired(self.redis, "niconico")
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", return_value=[job]) as probe:
+            r = self.post_url("https://www.nicovideo.jp/watch/sm9")   # 失効中でも公開動画は取れる
+        self.assertEqual((r.status_code, probe.call_args.args[4]), (200, None))
+
+    def test_auto_select_login_required_reasons(self) -> None:
+        self.c.BROWSER_UI_URL = "http://h:8080"
+        err = self.c.LoginRequiredError("login required")
+        url = "https://www.nicovideo.jp/watch/sm9"
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", side_effect=err):
+            r = self.post_url(url)
+        self.assertEqual((r.status_code, r.json["reason"], r.json["auth_profile"]),
+                         (401, "profile_unknown", "niconico"))
+        self.assertIn("profile=niconico", r.json["login_url"])
+        # 有効な cookie を自動で使ってログイン要求 → 失効として記録
+        (Path(self.dir) / "niconico.txt").write_bytes(b"x")
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", side_effect=err):
+            r = self.post_url(url)
+        self.assertEqual((r.json["reason"], r.json["auth_profile"]), ("cookie_expired", "niconico"))
+        self.assertEqual(self.c.profile_state(self.redis, "niconico"), "expired")
+        # 失効中: cookie なしで解析し、ログイン要求なら失効として案内
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", side_effect=err) as probe:
+            r = self.post_url(url)
+        self.assertEqual((probe.call_args.args[4], r.json["reason"]), (None, "cookie_expired"))
+        # 対応するプロファイルが無いサイト
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", side_effect=err):
+            r = self.post_url("https://vimeo.com/1")
+        self.assertEqual((r.json["reason"], r.json["auth_profile"]), ("cookie_missing", None))
+
     def test_unknown_profile(self) -> None:
         with mock.patch.object(self.m.function, "probe_and_build_jobs") as probe:
             r = self.post(auth_profile="ghost")

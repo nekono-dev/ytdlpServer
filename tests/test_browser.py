@@ -73,12 +73,15 @@ class NetscapeTest(unittest.TestCase):
         cs = [ck(".nicovideo.jp", "a"), ck("www.nicovideo.jp", "b"), ck("nicovideo.jp", "c"),
               ck(".google.com", "d"), ck("accounts.google.com", "e"),
               ck("evilnicovideo.jp", "f"), ck(".jp", "g"), ck("127.0.0.1", "h")]
-        kept = self.n.filter_cookies(cs, "https://account.nicovideo.jp/login")
+        kept = self.n.filter_cookies(cs, ["nicovideo.jp"])
         self.assertEqual([c["name"] for c in kept], ["a", "b", "c"])
+        both = self.n.filter_cookies(cs, ["nicovideo.jp", "google.com"])
+        self.assertEqual([c["name"] for c in both], ["a", "b", "c", "d", "e"])
+        self.assertEqual(self.n.filter_cookies(cs, []), [])
 
     def test_filter_public_suffix_not_kept(self) -> None:
         kept = self.n.filter_cookies([ck(".co.jp", "a"), ck(".example.co.jp", "b")],
-                                     "https://www.example.co.jp/")
+                                     [self.n.site_domain("https://www.example.co.jp/")])
         self.assertEqual([c["name"] for c in kept], ["b"])
 
     def test_to_netscape(self) -> None:
@@ -164,6 +167,31 @@ class SessionTest(unittest.IsolatedAsyncioTestCase):
                 await self.mgr.start(profile, url)
             self.assertEqual(cm.exception.status, 400)
         self.assertEqual((self.mgr.state, FakeBrowser.instances), ("idle", []))
+
+    async def test_preset_uses_definition(self) -> None:
+        FakeBrowser.cookies = [ck(".youtube.com", "SAPISID"), ck(".google.com", "SID"),
+                               ck("accounts.google.com", "LSID"), ck(".doubleclick.net", "IDE")]
+        await self.mgr.start("youtube", "https://ignored.example/")
+        self.assertTrue(FakeBrowser.instances[0].started[0].startswith("https://accounts.google.com/"))
+        res = await self.mgr.commit()
+        self.assertEqual((res["saved"], res["domains"]), (3, ["youtube.com", "youtu.be", "google.com"]))
+        text = (Path(self.dir) / "youtube.txt").read_text()
+        self.assertNotIn("doubleclick", text)
+        # プリセットは履歴に入らない
+        self.assertFalse((Path(self.dir) / "profiles.json").exists())
+
+    async def test_new_site_added_to_history_only_on_save(self) -> None:
+        cookies = sys.modules["cookies"]
+        await self.mgr.start("nico", self.URL)
+        await self.mgr.cancel()
+        self.assertIsNone(cookies.find_entry("nico"), "中止では履歴に入らない")
+        await self.mgr.start("nico", self.URL)
+        await self.mgr.commit()
+        e = cookies.find_entry("nico")
+        self.assertEqual((e["start_url"], e["domains"], e["preset"]), (self.URL, ["nicovideo.jp"], False))
+        # 2 回目は履歴の定義を使う(start_url の指定は不要)
+        await self.mgr.start("nico")
+        self.assertEqual(FakeBrowser.instances[-1].started, [self.URL])
 
     async def test_commit_saves_only_site_cookies(self) -> None:
         info = await self.mgr.start("nico", self.URL, mobile=True)
@@ -287,6 +315,33 @@ class ApiTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("cookie がありません", (await r.json())["message"])
         self.assertEqual((await self.client.delete("/session")).status, 200)
         self.assertFalse((Path(self.dir) / "nico.txt").exists())
+
+    async def test_profiles(self) -> None:
+        r = await self.client.get("/profiles")
+        data = await r.json()
+        self.assertEqual([p["name"] for p in data], ["youtube", "niconico", "instagram", "x", "bilibili"])
+        self.assertTrue(all(p["saved_at"] is None for p in data))
+        await self.client.post("/session", json={"profile": "niconico", "mobile": True})
+        await self.client.post("/session/commit")
+        await self.client.post("/session", json=self.body)          # 新しいサイト "nico"
+        await self.client.post("/session/commit")
+        data = {p["name"]: p for p in await (await self.client.get("/profiles")).json()}
+        self.assertIsNotNone(data["niconico"]["saved_at"])
+        self.assertFalse(data["nico"]["preset"])
+        self.assertNotIn("TOPSECRETVALUE", json.dumps(data))
+        # 削除: 履歴は消せる(cookie も)。プリセット・未知・不正な名前は消せない
+        self.assertEqual((await self.client.delete("/profiles/niconico")).status, 400)
+        self.assertEqual((await self.client.delete("/profiles/ghost")).status, 404)
+        self.assertEqual((await self.client.delete("/profiles/..%2Fx")).status, 400)
+        self.assertEqual((await self.client.delete("/profiles/nico")).status, 200)
+        self.assertFalse((Path(self.dir) / "nico.txt").exists())
+        self.assertTrue((Path(self.dir) / "niconico.txt").exists())
+
+    async def test_cannot_delete_profile_in_use(self) -> None:
+        await self.client.post("/session", json=self.body)
+        await self.client.post("/session/commit")
+        await self.client.post("/session", json={"profile": "nico", "mobile": True})
+        self.assertEqual((await self.client.delete("/profiles/nico")).status, 409)
 
     async def test_websocket(self) -> None:
         ws = await self.client.ws_connect("/ws")

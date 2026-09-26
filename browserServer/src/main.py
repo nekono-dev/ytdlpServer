@@ -6,6 +6,7 @@ import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+import cookies
 from aiohttp import WSMsgType, web
 from browser import ChromiumBrowser
 from session import SessionError, SessionManager
@@ -41,6 +42,34 @@ def manager_of(request: web.Request) -> SessionManager:
 
 async def index(_: web.Request) -> web.Response:
     return web.Response(text=INDEX_HTML, content_type="text/html")
+
+
+async def get_profiles(_: web.Request) -> web.Response:
+    """プリセットと履歴の一覧と、cookie の保存状況(中身は返さない)。"""
+    results = []
+    for e in cookies.profile_entries():
+        try:
+            saved_at: float | None = cookies.cookie_path(e["name"]).stat().st_mtime
+        except OSError:
+            saved_at = None
+        results.append({**e, "saved_at": saved_at})
+    return web.json_response(results)
+
+
+async def delete_profile(request: web.Request) -> web.Response:
+    name = request.match_info["name"]
+    manager = manager_of(request)
+    if manager.info()["profile"] == name:
+        raise SessionError(409, "ログイン操作中のプロファイルは削除できません")
+    try:
+        cookies.validate_profile(name)
+        cookies.remove_history(name)
+    except ValueError as e:
+        raise SessionError(400, str(e)) from None
+    except KeyError:
+        raise SessionError(404, "履歴にありません") from None
+    print("INFO: profile removed:", name)
+    return web.json_response({"message": "Removed."})
 
 
 async def get_session(request: web.Request) -> web.Response:
@@ -93,6 +122,8 @@ def create_app(manager: SessionManager) -> web.Application:
     app["manager"] = manager
     app.add_routes([
         web.get("/", index),
+        web.get("/profiles", get_profiles),
+        web.delete("/profiles/{name}", delete_profile),
         web.get("/session", get_session),
         web.post("/session", start_session),
         web.post("/session/commit", commit_session),
