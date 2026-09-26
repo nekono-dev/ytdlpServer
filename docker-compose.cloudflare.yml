@@ -20,6 +20,8 @@ services:
     environment:
       REDIS_URL: redis://redis
       SERVER_TTL: 24
+    volumes:
+      - ./cookies:/cookies
     restart: always
     ports:
       - 5000:5000
@@ -35,6 +37,7 @@ services:
       DOWNLOAD_DIR: /download
     volumes:
       - /mnt:/download
+      - ./cookies:/cookies
     restart: always
   redis-insight:
     image: redislabs/redisinsight:latest

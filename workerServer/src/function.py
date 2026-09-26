@@ -6,6 +6,8 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
+import cookies
+
 SAVEDIR = Path(os.environ.get("DOWNLOAD_DIR", "/download"))
 COPY_TIMEOUT = int(os.environ.get("COPY_TIMEOUT", "120"))
 VIDEO_EXTS = {"avi", "flv", "mkv", "mov", "mp4", "webm"}
@@ -74,15 +76,21 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
     base_name = safe_name if safe_name else str(job_id)
     outtmpl = str(SAVEDIR / subpath / (base_name + ".%(ext)s"))
 
-    cmd = [
-        "yt-dlp", "--no-progress", *with_youtube_defaults(options),
-        "-o", outtmpl, "--no-playlist", url,
-    ]
-    print("INFO: Running yt-dlp:", " ".join(cmd))
-
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        # auth_profile 指定時は cookie の一時コピーを渡し、更新分はストアへ書き戻す
+        with cookies.cookie_file(job.get("auth_profile")) as cookie_path:
+            cookie_opts = ["--cookies", cookie_path] if cookie_path else []
+            cmd = [
+                "yt-dlp", "--no-progress", *cookie_opts,
+                *with_youtube_defaults(options),
+                "-o", outtmpl, "--no-playlist", url,
+            ]
+            print("INFO: Running yt-dlp:", " ".join(cookies.mask_command(cmd)))
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
         print("INFO: yt-dlp succeeded for:", url)
+    except cookies.ProfileNotFoundError as e:
+        print("ERROR:", e)
+        return False, str(e)
     except subprocess.CalledProcessError as e:
         print("ERROR: yt-dlp failed (rc=", e.returncode, "):", e.stderr)
         return False, e.stderr or e.stdout or str(e)

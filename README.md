@@ -315,6 +315,7 @@ iOS ショートカットなどを作成すると楽に操作できる。
 | options   | string | yt-dlp のオプション                                        |
 | savedir   | string | 保存先のサブディレクトリ（指定した場合、作成して保存する） |
 | namefield | string | 保存ファイル名のテンプレート（例: `%(title)s-%(id)s`）     |
+| auth_profile | string | ログインが必要な動画で使う cookie プロファイル名（[ログインが必要な動画](#ログインが必要な動画を取得する)） |
 
 `namefield` は yt-dlp の `%(key)s` 形式で指定する。拡張子は自動で付く。
 
@@ -327,14 +328,73 @@ iOS ショートカットなどを作成すると楽に操作できる。
 | YouTube の音声を日本語にする     | `-f "bestaudio[ext=m4a][language^=ja]"`                |
 | タイトル等を日本語の翻訳にする   | `--extractor-args youtube:lang=ja`（音声は変わらない） |
 | ファイル名の文字化けを防ぐ       | `--windows-filenames`                                  |
-| ログインして取得する             | `-u <ユーザ名> -p <パスワード>`                        |
+| ログインして取得する             | `options` ではなく `auth_profile` を使う（[後述](#ログインが必要な動画を取得する)） |
 | 出力形式を mp4 にする            | `--merge-output-format mp4`                            |
 | コーデックを avc1 (mp4) にする   | `-f "bestvideo[vcodec^=avc1][ext=mp4]"`                |
 | 同じファイルを再ダウンロードする | `--force-overwrites`                                   |
 
 ---
 
+## ログインが必要な動画を取得する
+
+一部のサイトは、ユーザ名とパスワードでは yt-dlp からログインできない。
+このサーバは、ログイン済みの **cookie プロファイル** を使って取得する。リクエストの `auth_profile` に、登録済みのプロファイル名を指定する。
+
+```sh
+curl -H "Content-Type: application/json" -X POST "http://<IPアドレス>:5000/download" \
+  -d '{"url": "https://www.nicovideo.jp/watch/sm00000000", "auth_profile": "nico"}'
+```
+
+- `/schedule` でも同じように `auth_profile` を指定できる。
+- プロファイル名は英数字・`-`・`_`（64 文字まで）。
+- `options` の `-u` / `-p`（`--username` / `--password`）、`--cookies`、`--netrc*` は使えない（400 になる）。
+- cookie は `<プロファイル名>.txt` として保存される。保存先は Docker Compose では `cookies/`、Alpine では `/opt/ytdlpserver/cookies/`（`COOKIE_DIR` で変更可）。
+  cookie はパスワードと同じ扱いにし、他人に渡さず、Git にもコミットしない（`cookies/` は `.gitignore` 済み）。
+
+### プロファイルの一覧
+
+```sh
+curl "http://<IPアドレス>:5000/auth/profiles"
+```
+
+`status` は `valid`（有効）か `expired`（失効を検知済み）。cookie の中身は返さない。
+
+### ログインが必要な場合の応答
+
+cookie が未指定・未登録・失効しているときは、リクエストの時点で **HTTP 401** が返る。
+
+```json
+{
+  "error": "login_required",
+  "reason": "cookie_expired",
+  "auth_profile": "nico",
+  "message": "auth_profile 'nico' の cookie が無効です。再ログインして cookie を更新してください。",
+  "login_url": null
+}
+```
+
+| 項目        | 内容                                                      |
+| ----------- | --------------------------------------------------------- |
+| reason      | 下表                                                      |
+| login_url   | 再ログイン用の画面の URL。設定されていなければ `null`    |
+
+| reason            | 意味                                                   |
+| ----------------- | ------------------------------------------------------ |
+| `cookie_missing`  | ログインが必要だが `auth_profile` が指定されていない   |
+| `profile_unknown` | 指定したプロファイルの cookie が保存されていない       |
+| `cookie_expired`  | cookie が失効している                                  |
+
+- cookie を更新すると、サーバを再起動しなくても `valid` に戻る。
+- キューに積んだ後で cookie が失効した場合は、ジョブが失敗し、ジョブ情報に `error_code=login_required` が入る。cookie を更新するまで自動リトライはしない。
+- `/download/scheduled` で 401 になった予約は、削除されずに残る。
+
+---
+
 ## トラブルシューティング
+
+### `login_required`（HTTP 401）が返る
+
+指定した `auth_profile` の cookie が未保存または失効している。[ログインが必要な場合の応答](#ログインが必要な場合の応答)の `reason` を確認し、再ログインして cookie を更新する。
 
 ### `yt-dlp probe failed; wait restart yt-dlp.` が返る
 

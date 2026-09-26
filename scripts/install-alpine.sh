@@ -29,6 +29,7 @@ usage() {
   REPO_REF          ブランチまたはタグ (埋め込み値)
   INSTALL_DIR       /opt/ytdlpserver
   DOWNLOAD_DIR      /mnt          動画の保存先
+  COOKIE_DIR        $INSTALL_DIR/cookies  cookie プロファイルの保存先 (ログインセッション)
   WORKER_COUNT      1             worker の数
   API_PORT          5000
   POT_PORT          4416          PO Token プロバイダ (127.0.0.1 限定)
@@ -75,7 +76,7 @@ die() {
 
 # ---- 設定の読み込み (環境変数 > 保存済み > 既定値) ---------------------------
 # 環境変数の指定を退避してから保存済みの設定を読み、指定があれば上書きする
-_ENV_KEYS="REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR WORKER_COUNT API_PORT POT_PORT \
+_ENV_KEYS="REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR COOKIE_DIR WORKER_COUNT API_PORT POT_PORT \
 SERVER_TTL REDIS_TTL RETRY_COUNT WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
 WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION RI_BUILD_STORAGE REDIS_UI_HOST"
 _saved=""
@@ -95,6 +96,7 @@ REPO_URL="${REPO_URL:-$REPO_URL_DEFAULT}"
 REPO_REF="${REPO_REF:-$REPO_REF_DEFAULT}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/ytdlpserver}"
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-/mnt}"
+COOKIE_DIR="${COOKIE_DIR:-$INSTALL_DIR/cookies}"
 WORKER_COUNT="${WORKER_COUNT:-1}"
 API_PORT="${API_PORT:-5000}"
 POT_PORT="${POT_PORT:-4416}"
@@ -150,7 +152,7 @@ write_conf() {
 	umask 077
 	{
 		echo "# ytdlpserver の設定 (install-alpine.sh が生成)。編集後は再起動すること。"
-		for _k in REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR WORKER_COUNT API_PORT POT_PORT \
+		for _k in REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR COOKIE_DIR WORKER_COUNT API_PORT POT_PORT \
 			SERVER_TTL REDIS_TTL RETRY_COUNT WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
 			WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION RI_BUILD_STORAGE REDIS_UI_HOST; do
 			eval "_v=\$$_k"
@@ -232,6 +234,9 @@ setup_pot_provider() {
 # ---- ディレクトリ -----------------------------------------------------------
 setup_dirs() {
 	mkdir -p "$DOWNLOAD_DIR"
+	# cookie はパスワード同等のため root のみ参照可にする
+	mkdir -p "$COOKIE_DIR"
+	chmod 700 "$COOKIE_DIR"
 }
 
 # ---- redis ------------------------------------------------------------------
@@ -270,7 +275,7 @@ EOF
 . "$CONF_FILE"
 # アプリは yt-dlp を PATH から呼ぶため venv の bin を先頭に追加する
 export PATH="$VENV_DIR/bin:\$PATH"
-export REDIS_URL="redis://127.0.0.1:6379" SERVER_TTL PORT="\$API_PORT"
+export REDIS_URL="redis://127.0.0.1:6379" SERVER_TTL PORT="\$API_PORT" COOKIE_DIR
 "$BIN_DIR/update-ytdlp"
 cd "$SRC_DIR/apiServer/src"
 # SERVER_TTL 時間で停止させ、supervise-daemon の respawn で再起動する
@@ -281,7 +286,7 @@ EOF
 #!/bin/sh
 . "$CONF_FILE"
 export PATH="$VENV_DIR/bin:\$PATH"
-export REDIS_URL="redis://127.0.0.1:6379" REDIS_TTL RETRY_COUNT DOWNLOAD_DIR
+export REDIS_URL="redis://127.0.0.1:6379" REDIS_TTL RETRY_COUNT DOWNLOAD_DIR COOKIE_DIR
 "$BIN_DIR/update-ytdlp"
 exec "$VENV_DIR/bin/python3" -u "$SRC_DIR/workerServer/src/main.py"
 EOF

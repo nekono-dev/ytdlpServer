@@ -6,6 +6,7 @@ import sys
 import time
 from typing import Any
 
+import cookies
 import redis
 from function import run_yt_dlp
 
@@ -56,6 +57,7 @@ def make_job_hash(job_id: str, job: dict[str, Any]) -> str:
         "created_at": _to_str(time.time()),
         "failed_count": "0",
         "filename": _to_str(job.get("filename") or job_id),
+        "auth_profile": _to_str(job.get("auth_profile") or ""),
     }
     redis_client.hset(key, mapping=mapping)
     try:
@@ -125,6 +127,25 @@ def update_status(key: str, status: str, extra: dict[str, Any] | None = None) ->
     return new_key
 
 
+def record_failure(key: str, auth_profile: str | None, output: str) -> str:
+    """失敗を記録する。ログイン要求なら error_code を付け、cookie を失効扱いにする。"""
+    try:
+        redis_client.hincrby(key, "failed_count", 1)
+    except Exception:
+        print("ERROR: Failed to increment failed_count for", key)
+
+    extra: dict[str, Any] = {
+        "error": output, "failed_at": str(time.time()), "error_code": "",
+        "login_url": ""}
+    if cookies.classify_login_required(output):
+        extra["error_code"] = "login_required"
+        extra["login_url"] = cookies.login_url(auth_profile) or ""
+        if auth_profile:
+            cookies.mark_expired(redis_client, auth_profile)
+        print("WARNING: login required. profile:", auth_profile or "(none)")
+    return update_status(key, "failed", extra)
+
+
 def handle_job(raw: str) -> None:
     try:
         job = json.loads(raw)
@@ -148,12 +169,25 @@ def handle_job(raw: str) -> None:
             key, "completed", {"completed_at": str(time.time()), "output": output})
     else:
         # increment failed_count on current key, then migrate to failed
-        try:
-            redis_client.hincrby(key, "failed_count", 1)
-        except Exception:
-            print("ERROR: Failed to increment failed_count for", key)
-        key = update_status(
-            key, "failed", {"error": output, "failed_at": str(time.time())})
+        key = record_failure(key, job.get("auth_profile"), output)
+
+
+def is_waiting_for_login(key: str) -> bool:
+    """ログイン要求で失敗し、cookie がまだ有効に戻っていないジョブか。
+
+    cookie を入れ直す(valid に戻る)まで再試行しない。
+    プロファイル未指定のログイン要求は再試行しても解決しないため常に対象外。
+    """
+    try:
+        data = redis_client.hgetall(key) or {}
+    except Exception:
+        return False
+    if data.get("error_code") != "login_required":
+        return False
+    profile = data.get("auth_profile") or ""
+    if not profile:
+        return True
+    return cookies.profile_state(redis_client, profile) != "valid"
 
 
 def find_retryable_failed_key() -> str | None:
@@ -168,7 +202,7 @@ def find_retryable_failed_key() -> str | None:
                 cnt = int(redis_client.hget(k, "failed_count") or 0)
             except Exception:
                 cnt = 0
-            if cnt < RETRY_COUNT:
+            if cnt < RETRY_COUNT and not is_waiting_for_login(k):
                 return k
     except Exception:
         # Fallback: no retryable key found or scan failed
@@ -196,6 +230,7 @@ def process_failed_key(key: str) -> None:
         "options": json.loads(data.get("options", "[]") or "[]"),
         "savedir": data.get("savedir", ""),
         "filename": data.get("filename", ""),
+        "auth_profile": data.get("auth_profile", ""),
         "id": key.split(":")[-1],
     }
 
@@ -204,11 +239,7 @@ def process_failed_key(key: str) -> None:
     if ok:
         update_status(key, "completed", {"completed_at": str(time.time()), "output": output})
     else:
-        try:
-            redis_client.hincrby(key, "failed_count", 1)
-        except Exception:
-            print("ERROR: Failed to increment failed_count for", key)
-        update_status(key, "failed", {"error": output, "failed_at": str(time.time())})
+        record_failure(key, job.get("auth_profile"), output)
 
 
 def main() -> int:

@@ -14,6 +14,7 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 - [実装上のポイント](#実装上のポイント)
 - [Alpine インストーラ](#alpine-インストーラ)
 - [CI](#ci)
+- [テスト](#テスト)
 - [Lint](#lint)
 - [後片付け](#後片付け)
 
@@ -43,6 +44,9 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 | -------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | [apiServer/](apiServer/)                                                   | API サーバ（Flask + waitress）。`src/main.py`（ルーティング）、`src/function.py`（yt-dlp 解析・ジョブ生成） |
 | [workerServer/](workerServer/)                                             | Worker。`src/main.py`（キュー処理・状態遷移）、`src/function.py`（yt-dlp 実行） |
+| `*/src/cookies.py`                                                         | cookie プロファイルの共通処理（API・Worker で**同一内容**。片方だけ直さない） |
+| [tests/](tests/)                                                           | 単体テスト（標準 `unittest`）                                     |
+| [specs/](specs/)                                                           | 要件・設計・タスク（仕様駆動開発）。全体用と、アプリ別（`apiServer/` `workerServer/` `browserServer/`） |
 | `*/yt-dlp.conf`                                                            | イメージ内の `/etc/yt-dlp.conf` になる yt-dlp 共通設定            |
 | [nginx/](nginx/)                                                           | HTTPS 構成用の nginx イメージ                                     |
 | [docker-compose.yml](docker-compose.yml)                                   | 基本構成（HTTP）。`.nginx.yml` / `.cloudflare.yml` は派生構成     |
@@ -157,6 +161,8 @@ docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download 
 | PORT        | `5000`                   | 待ち受けポート（`0.0.0.0`）                       |
 | DEBUG       | 未設定                   | 空でない値でデバッグモード                        |
 | SERVER_TTL  | `24`                     | 定期再起動の間隔（時間）。数値以外は 24 になる    |
+| COOKIE_DIR  | `/cookies`               | cookie プロファイルの置き場所（Worker と共有する） |
+| BROWSER_UI_URL | 未設定                | ログイン要求の応答に載せる `login_url` の基準 URL |
 
 ### Worker
 
@@ -167,6 +173,8 @@ docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download 
 | RETRY_COUNT   | `5`                      | 失敗ジョブの自動リトライ上限（`failed_count` がこの値未満なら対象） |
 | BRPOP_TIMEOUT | `60`                     | キュー待ちのタイムアウト（秒）                      |
 | DOWNLOAD_DIR  | `/download`              | 保存先のルート                                      |
+| COOKIE_DIR    | `/cookies`               | cookie プロファイルの置き場所（API と共有する）     |
+| BROWSER_UI_URL | 未設定                  | ジョブの `login_url` の基準 URL                     |
 
 ## API 仕様
 
@@ -179,6 +187,7 @@ docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download 
 | GET      | `/schedule`          | 保存済みリクエストの一覧（`options` は含めない）                         |
 | POST     | `/download/scheduled`| 保存済みリクエストを解析してキューへ積む。`{"count": N \| "all"}`（省略時は all） |
 | POST     | `/download/retry`    | 失敗ジョブの `failed_count` を 0 に戻し、Worker が再試行できるようにする |
+| GET      | `/auth/profiles`     | cookie プロファイルの名前・状態・更新時刻の一覧（cookie の中身は返さない） |
 
 ### リクエスト項目（`/download`・`/schedule`）
 
@@ -188,8 +197,10 @@ docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download 
 | options   | string | 任意 | yt-dlp のオプション。空白区切りで分割して配列化する（引用符は解釈しない）|
 | savedir   | string | 任意 | 保存先のサブディレクトリ                                                 |
 | namefield | string | 任意 | ファイル名テンプレート（`%(key)s` 形式）。空白のみは未指定扱い           |
+| auth_profile | string | 任意 | cookie プロファイル名（`[A-Za-z0-9_-]{1,64}`）。空文字は未指定扱い |
 
 - `options` が文字列以外だと 400（`Invalid request.`）になる。
+- `options` に `--cookies` / `--cookies-from-browser` / `-u` `--username` / `-p` `--password` / `--twofactor` / `-n` `--netrc*` を含むと 400（該当オプション名を `message` に返す）。
 - `savedir` は NFC 正規化し、`\ / ¥ : * ? " < > |` を `_` に置換、全角スペースを除去し、連続空白を 1 つにまとめる。
 
 ### レスポンス
@@ -197,7 +208,8 @@ docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download 
 | ケース                       | ステータス | message                                        |
 | ---------------------------- | ---------- | ---------------------------------------------- |
 | 受理                         | 200        | `Request accepted.`                            |
-| パラメータ不正               | 400        | `Invalid request.`                             |
+| パラメータ不正               | 400        | `Invalid request.`（禁止オプション・不正な `auth_profile` は理由を返す） |
+| ログインが必要               | 401        | `error=login_required`、`reason`（`cookie_missing` / `profile_unknown` / `cookie_expired`）、`auth_profile`、日本語の `message`、`login_url` を返す。プロセスは再起動しない |
 | namefield が不正             | 400        | namefield のエラー内容                         |
 | yt-dlp の解析失敗            | 400        | `yt-dlp probe failed; wait restart yt-dlp.`（その後プロセスを終了して再起動） |
 | 内部エラー                   | 500        | `Internal server error.`                       |
@@ -234,12 +246,14 @@ List。API が `RPUSH`、Worker が `BLPOP` する。要素は次の JSON。
 | options  | オプションの配列（`--no-playlist` は解析時のみ除外し、ジョブには残す）|
 | savedir  | サブディレクトリ                                                        |
 | filename | 拡張子を除いたファイル名                                                |
+| auth_profile | cookie プロファイル名（指定時のみ）                                 |
 
 プレイリストは要素ごとに 1 ジョブへ分解される。
 
 ### 予約リクエスト（`ytdlp:requests`）
 
-List。`/schedule` が保存した `url` / `options` / `savedir` / `namefield` の JSON。
+List。`/schedule` が保存した `url` / `options` / `savedir` / `namefield` / `auth_profile` の JSON。
+`/download/scheduled` で 401（ログイン要求）になった要素は、先頭へ戻して残す。
 
 ### ジョブ状態（`ytdlp:jobs:<status>:<job_id>`）
 
@@ -255,8 +269,17 @@ Hash。`status` がキー名に入るため、状態が変わると **キーご�
 | output       | 成功時の yt-dlp の標準出力                      |
 | error        | 失敗時のエラー内容                              |
 | failed_count | 失敗回数。`RETRY_COUNT` に達すると自動リトライされない |
+| auth_profile | cookie プロファイル名（未指定は空）             |
+| error_code   | ログイン要求で失敗したとき `login_required`。それ以外の失敗では空 |
+| login_url    | `BROWSER_UI_URL` があるときの再ログイン先       |
 
 同じ ID のジョブを重複して積むと、状態キーが上書きされる点に注意する。
+
+### cookie プロファイルの状態（`ytdlp:auth:profile:<name>`）
+
+Hash。ログイン要求を検知したときだけ作られ、`status=expired` と `expired_at`（UNIX 秒）を持つ。
+cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）。
+`expired_at` 以降に更新された cookie ファイルがあれば有効に戻る（cookie を置き直せば自動復帰する）。
 
 ## 実装上のポイント
 
@@ -282,6 +305,11 @@ Hash。`status` がキー名に入るため、状態が変わると **キーご�
 - `savedir` / `filename` は Worker 側でも同じ規則で無害化する。
 - 失敗すると `failed_count` を加算して `failed` に移す。起動のたびに `failed_count < RETRY_COUNT` の失敗ジョブを探し、
   あればキューより優先して再試行する。
+
+### cookie によるログイン
+
+設計は [specs/design.md](specs/design.md)（全体）、[specs/apiServer/design.md](specs/apiServer/design.md)、[specs/workerServer/design.md](specs/workerServer/design.md) を参照する。
+共通処理は `*/src/cookies.py`（API・Worker で同一内容。**修正するときは両方を揃える**。一致はテストで確認する）。
 
 ### コンテナイメージ
 
@@ -334,6 +362,18 @@ shellcheck -s sh scripts/install-alpine.sh
    - ブランチ: ブランチ名（`/` は `-`）の prerelease に添付し、自動更新する。
 
 スクリプトの `REPO_REF_DEFAULT=` などの行頭書式を変えると埋め込みが失敗するため、変更時は CI の `sed` / `grep` も合わせて確認する。
+
+## テスト
+
+標準の `unittest` で、Redis やネットワークは不要（Redis は疑似実装、yt-dlp は差し替え）。依存は Flask・redis のみ。
+
+```sh
+pip install -r apiServer/requirements.txt   # Flask, redis, waitress
+python3 -m unittest discover -s tests -v
+```
+
+- `tests/test_cookies.py`: 共通処理（判定・禁止オプション・書き戻し・状態）。API と Worker の `cookies.py` が同一であることも確認する。
+- `tests/test_api.py` / `tests/test_worker.py`: 401 応答、予約の保持、リトライ除外、ログの伏せ字など。
 
 ## Lint
 

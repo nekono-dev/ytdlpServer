@@ -42,6 +42,7 @@ yt-dlp -j --flat-playlist <URL>
   - url: string (必須) - ダウンロード対象のURL
   - options: string (任意) - yt-dlpに渡す追加オプション。`--best-video --best-audio`など、複数のオプションが1つの文字列として渡される。
   - savedir: string (任意) - 指定された場合はサブディレクトリを作成し、そこにダウンロードする。
+  - auth_profile: string (任意) - ログインが必要な動画用の cookie プロファイル名（`COOKIE_DIR/<名前>.txt`）。`options` の `-u/-p/--cookies` 等は禁止。cookie が無効なら 401 `login_required`。
 
 ### 動作詳細
 

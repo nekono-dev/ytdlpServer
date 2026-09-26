@@ -12,6 +12,7 @@ import redis
 from flask import Flask, jsonify, request
 from waitress import serve
 
+import cookies
 import function
 
 app = Flask(__name__)
@@ -42,11 +43,13 @@ except Exception as e:
 
 
 class ParameterError(Exception):
-    def __init__(self: Exception) -> None:
-        return
+    def __init__(self: Exception, message: str = "Invalid request.") -> None:
+        super().__init__(message)
+        self.message = message
 
 
-def parse_request(form: dict) -> tuple[str, list, str | None, str | None]:
+def parse_request(
+        form: dict) -> tuple[str, list, str | None, str | None, str | None]:
     if not isinstance(form, dict):
         raise ParameterError
 
@@ -84,15 +87,32 @@ def parse_request(form: dict) -> tuple[str, list, str | None, str | None]:
         # split on whitespace and remove empty segments
         options = [p for p in raw_options.split() if p != ""]
 
-    return url, options, savedir, namefield
+    # 認証情報・cookie 関連オプションは受け付けない(auth_profile を使う)
+    try:
+        cookies.check_options(options)
+    except ValueError as e:
+        raise ParameterError(str(e)) from None
+
+    auth_profile = form.get("auth_profile")
+    if auth_profile == "":
+        auth_profile = None
+    if auth_profile is not None:
+        try:
+            auth_profile = cookies.validate_profile(auth_profile)
+        except ValueError as e:
+            raise ParameterError(str(e)) from None
+
+    return url, options, savedir, namefield, auth_profile
 
 def probe_jobs(
         url: str,
         options: list,
         savedir: str | None,
-        namefield: str | None) -> list[dict]:
+        namefield: str | None,
+        auth_profile: str | None = None) -> list[dict]:
     try:
-        return function.probe_and_build_jobs(url, options, savedir, namefield)
+        return function.probe_and_build_jobs(
+            url, options, savedir, namefield, auth_profile)
     except RuntimeError as e:
         msg = str(e)
         print("ERROR: probe failed:", msg)
@@ -103,7 +123,8 @@ def add_request(
         url: str,
         options: list,
         savedir: str | None,
-        namefield: str | None) -> None:
+        namefield: str | None,
+        auth_profile: str | None = None) -> None:
     key = f"{REQUESTS_PREFIX_BASE}"
     try:
         payload = json.dumps({
@@ -111,6 +132,7 @@ def add_request(
             "options": options,
             "savedir": savedir,
             "namefield": namefield,
+            "auth_profile": auth_profile,
             },
             ensure_ascii=False)
         redis_client.rpush(key, payload)
@@ -138,14 +160,77 @@ def push_jobs(jobs: list[dict]) -> int:
 
     return len(entries)
 
+def login_required_response(
+        auth_profile: str | None, reason: str) -> tuple[dict, int]:
+    """ログインが必要なことをユーザへ通知する 401 応答を組み立てる。
+
+    reason: cookie_missing(auth_profile 未指定) / profile_unknown(未登録)
+            / cookie_expired(失効)
+    """
+    messages = {
+        "cookie_missing": (
+            "ログインが必要なコンテンツです。cookie でログインしたプロファイルを "
+            "auth_profile に指定してください。"),
+        "profile_unknown": (
+            f"auth_profile '{auth_profile}' の cookie が登録されていません。"
+            "ログインして cookie を登録してください。"),
+        "cookie_expired": (
+            f"auth_profile '{auth_profile}' の cookie が無効です。"
+            "再ログインして cookie を更新してください。"),
+    }
+    body = {
+        "error": "login_required",
+        "reason": reason,
+        "auth_profile": auth_profile,
+        "message": messages[reason],
+        "login_url": cookies.login_url(auth_profile),
+    }
+    print("WARNING: login required:", reason, "profile:", auth_profile)
+    return jsonify(body), 401
+
+
+class ProfileUnavailableError(cookies.LoginRequiredError):
+    """指定プロファイルが未登録/失効中で、probe するまでもなくログインが必要。"""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def require_valid_profile(auth_profile: str | None) -> None:
+    if not auth_profile:
+        return
+    state = cookies.profile_state(redis_client, auth_profile)
+    if state != "valid":
+        reason = "profile_unknown" if state == "missing" else "cookie_expired"
+        raise ProfileUnavailableError(reason)
+
+
+def login_required_from(
+        error: cookies.LoginRequiredError,
+        auth_profile: str | None) -> tuple[dict, int]:
+    if isinstance(error, ProfileUnavailableError):
+        return login_required_response(auth_profile, error.reason)
+    # probe 由来: 指定 cookie が効かなかった(失効)か、そもそも未指定
+    if auth_profile:
+        cookies.mark_expired(redis_client, auth_profile)
+        return login_required_response(auth_profile, "cookie_expired")
+    return login_required_response(None, "cookie_missing")
+
+
 def handle_download(
         url: str,
         options: list,
         savedir: str | None,
-        namefield: str | None) -> tuple[dict, int]:
+        namefield: str | None,
+        auth_profile: str | None = None) -> tuple[dict, int]:
     jobs: list[dict] = []
     try:
-        jobs = probe_jobs(url, options, savedir, namefield)
+        require_valid_profile(auth_profile)
+        jobs = probe_jobs(url, options, savedir, namefield, auth_profile)
+    except cookies.LoginRequiredError as e:
+        # ログイン要求はサーバ不調ではないため、プロセス再起動は行わない
+        return login_required_from(e, auth_profile)
     except RuntimeError:
         print("ERROR: yt-dlp probe failed — process exit.")
 
@@ -183,28 +268,29 @@ def endpoint() -> tuple[dict, int]:
     # endpoint main flow
     form = request.json
     try:
-        url, options, savedir, namefield = parse_request(form)
-    except ParameterError:
-        print("Error: Invalid request requested.")
-        return jsonify({"message": "Invalid request."}), 400
+        url, options, savedir, namefield, auth_profile = parse_request(form)
+    except ParameterError as e:
+        print("Error: Invalid request requested:", e.message)
+        return jsonify({"message": e.message}), 400
     if DEBUG_MODE:
         print(
             "DEBUG REQUEST: "
-            f"url={url}, options={options}, savedir={savedir}, namefield={namefield}")
+            f"url={url}, options={options}, savedir={savedir}, "
+            f"namefield={namefield}, auth_profile={auth_profile}")
 
-    return handle_download(url, options, savedir, namefield)
+    return handle_download(url, options, savedir, namefield, auth_profile)
 
 @app.route("/schedule", methods=["POST"])
 def schedule_endpoint() -> tuple[dict, int]:
     form = request.json
     try:
-        url, options, savedir, namefield = parse_request(form)
-    except ParameterError:
-        print("Error: Invalid scheduled request.")
-        return jsonify({"message": "Invalid request."}), 400
+        url, options, savedir, namefield, auth_profile = parse_request(form)
+    except ParameterError as e:
+        print("Error: Invalid scheduled request:", e.message)
+        return jsonify({"message": e.message}), 400
 
     try:
-        add_request(url, options, savedir, namefield)
+        add_request(url, options, savedir, namefield, auth_profile)
     except Exception:
         return jsonify({"message": "Internal server error."}), 500
 
@@ -281,10 +367,16 @@ def download_scheduled() -> tuple[dict, int]:
             options = req.get("options") or []
             savedir = req.get("savedir")
             namefield = req.get("namefield")
+            auth_profile = req.get("auth_profile")
 
-            msg, code = handle_download(url, options, savedir, namefield)
+            msg, code = handle_download(
+                url, options, savedir, namefield, auth_profile)
+            if code == 401:
+                # ログイン待ち: 予約を先頭へ戻し、ログイン要求をそのまま返す
+                redis_client.lpush(key, entry)
+                return msg, code
             if code != 200:
-                raise Exception(msg.get("message", "Unknown error"))
+                raise Exception(msg.get_json().get("message", "Unknown error"))
 
             processed += 1
     except Exception as e:
@@ -293,6 +385,12 @@ def download_scheduled() -> tuple[dict, int]:
 
     return jsonify({
         "message": "Processed scheduled requests.", "count": str(processed)}), 200
+
+
+@app.route("/auth/profiles", methods=["GET"])
+def get_auth_profiles() -> tuple[dict, int]:
+    # プロファイル名と状態のみ返す。cookie の中身は返さない
+    return jsonify(cookies.list_profiles(redis_client)), 200
 
 
 @app.route("/download/retry", methods=["POST"])

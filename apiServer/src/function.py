@@ -7,6 +7,8 @@ import unicodedata
 import uuid
 from pathlib import Path
 
+import cookies
+
 INVALID_FS_CHARS = re.compile(r'[\\/¥:*?"<>|]')
 TEMPLATE_PATTERN = re.compile(r"%\(([^)]+)\)s")
 MAX_JOB_ID_BYTES = 200
@@ -85,28 +87,36 @@ def probe_and_build_jobs(
         url: str,
         options: list,
         savedir: str | None,
-        namefield: str | None) -> list[dict]:
+        namefield: str | None,
+        auth_profile: str | None = None) -> list[dict]:
     """Probe the `url` with yt_dlp and return a list of job records suitable for Redis.
 
     The function does NOT push to Redis; it only returns job dicts of the form:
     {"url": <target_url>, "options": <options>, "savedir": <savedir>}.
+    `auth_profile` を指定すると cookie を使って probe し、ジョブにも引き継ぐ。
+    ログイン要求(cookie 未指定/失効)は cookies.LoginRequiredError を送出する。
     """
     filtered_opts = with_youtube_defaults(
         [opt for opt in (options or []) if opt != "--no-playlist"])
 
-    cmd = ["yt-dlp", "-j", "--no-progress", "--flat-playlist", *filtered_opts, url]
+    with cookies.cookie_file(auth_profile) as cookie_path:
+        cookie_opts = ["--cookies", cookie_path] if cookie_path else []
+        cmd = [
+            "yt-dlp", "-j", "--no-progress", "--flat-playlist",
+            *cookie_opts, *filtered_opts, url]
 
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        out = proc.stdout or ""
-    except subprocess.CalledProcessError as e:
-        msg = (
-            f"yt-dlp probe failed (rc={e.returncode}): "
-            f"{e.stderr or e.stdout or str(e)}")
-        raise RuntimeError(msg) from e
-    except FileNotFoundError:
-        msg = "yt-dlp not found in PATH"
-        raise RuntimeError(msg) from None
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            out = proc.stdout or ""
+        except subprocess.CalledProcessError as e:
+            detail = e.stderr or e.stdout or str(e)
+            msg = f"yt-dlp probe failed (rc={e.returncode}): {detail}"
+            if cookies.classify_login_required(detail):
+                raise cookies.LoginRequiredError(msg) from e
+            raise RuntimeError(msg) from e
+        except FileNotFoundError:
+            msg = "yt-dlp not found in PATH"
+            raise RuntimeError(msg) from None
 
     objs: list = []
 
@@ -138,6 +148,8 @@ def probe_and_build_jobs(
         extractor = entry.get("ie_key") or entry.get("extractor")
 
         job: dict = {"options": options, "savedir": savedir}
+        if auth_profile:
+            job["auth_profile"] = auth_profile
 
         template_context = dict(entry)
         template_context["id"] = fallback_id
