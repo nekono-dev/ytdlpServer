@@ -25,3 +25,10 @@
 - [x] compose に `BROWSER_UI_URL`（`${BROWSER_UI_URL:-}`）を追加する
 
 検証: 単体テスト。実機では、キュー投入後に失効したジョブの `login_url` は未確認（API 側の 401 と同じ組み立てを共用）。
+
+## cookie セッション認証（Phase 4、未着手）
+
+設計は [design.md](design.md)。
+
+- [ ] `record_failure` で、`auth_profile` の無いジョブの `login_url` にプロファイルを使う
+- [ ] 単体テスト

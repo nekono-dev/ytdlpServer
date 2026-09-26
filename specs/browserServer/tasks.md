@@ -51,3 +51,26 @@
 - ログイン完了の自動検知（サイトごとの「ログイン済みを示す cookie 名」を指定し、現れたら保存する）。要否は未決。
 - プロファイルの削除（操作画面・API）。
 - Alpine インストーラ（Docker 無し構成）への browserServer の組み込み。
+
+## cookie セッション認証（Phase 3: 画面配信方式への置き換え、未着手）
+
+設計は [design.md](design.md)。PoC（A 案）で、スマートフォンでのログインと Turnstile の通過を確認済み。
+
+- [ ] aiohttp へ移行し、画面配信（WebSocket）と入力の送信を実装（`src/browser.py`、`src/session.py`、`src/main.py`）
+- [ ] ヘッドあり（Xvfb）で起動し、タッチ端末では起動フラグでモバイル UA にする
+- [ ] 操作画面（canvas、タッチ・マウス、キーボード、貼り付け、戻る・再読み込み）
+- [ ] noVNC 一式（x11vnc・novnc・websockify、6080）を削除。compose・Dockerfile を更新
+- [ ] 単体テスト（状態遷移、入力の変換、保存）
+- [ ] README・DEVELOP.md を更新
+- [ ] 実機検証（モックサイトでの保存、Turnstile の通過、タブの追従、6080 と 9222 が LAN から届かないこと、待機中の負荷）
+
+## cookie セッション認証（Phase 4: プロファイルのプリセットと履歴、未着手）
+
+設計は [design.md](design.md)。
+
+- [ ] `GET /profiles`、`DELETE /profiles/{name}`、`POST /session` のプロファイル解決
+- [ ] 保存時の `domains` による絞り込み（複数ドメイン）と、新しいサイトの履歴への追加
+- [ ] 操作画面のプルダウン（プリセット・履歴・新しいサイト、保存状況、削除）と `login_url` の反映
+- [ ] 単体テスト
+- [ ] README・DEVELOP.md を更新
+- [ ] 実機検証（プリセットの保存、YouTube の複数ドメイン、履歴の追加・削除、API の自動選択）

@@ -28,3 +28,13 @@
 - [x] 実サイトのプロファイルで、失効（`expired`）から cookie の置き直しで再起動なしに復帰できることを確認する
 
 検証: 検証サーバで、無効 cookie とプロファイル未指定の 401 が、`login_url`（`profile` と `start_url`、エンコード済み）を返すこと、`GET /auth/profiles` の各行が `?profile=` の URL を返すことを確認。
+
+## cookie セッション認証（Phase 4、未着手）
+
+設計は [design.md](design.md)。
+
+- [ ] `cookies.py` にプロファイルの定義の読み込み（プリセット・履歴）と `resolve_profile()` を追加（3 アプリ同一）
+- [ ] `src/presets.json` を追加（3 アプリ同一）
+- [ ] `handle_download` で、`auth_profile` 省略時の自動選択と、候補での 401
+- [ ] `GET /auth/profiles` に `label` と `domains` を付ける
+- [ ] 単体テスト

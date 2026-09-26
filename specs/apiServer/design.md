@@ -68,3 +68,24 @@ flowchart TD
 - クエリは URL エンコードする。`auth_profile` 未指定（`cookie_missing`）でも `start_url` は付ける（`profile` は付けない）。
 - `start_url` はリクエスト URL の origin（`http(s)://ホスト/`）。`http(s)` 以外の URL では付けない。
 - cookie を登録する API は追加しない（A8）。
+
+### Phase 4: プロファイルの自動選択
+
+```mermaid
+flowchart TD
+    A[POST /download] --> B{auth_profile 指定?}
+    B -- あり --> P[Phase 1 の処理]
+    B -- なし --> C{URL に対応する<br>プロファイルがある?}
+    C -- なし --> N[cookie なしで probe]
+    C -- あり --> S{状態}
+    S -- valid --> V[そのプロファイルで probe]
+    S -- missing / expired --> N2[cookie なしで probe<br>候補として覚える]
+    N2 -- ログイン要求 --> X["401: auth_profile=候補<br>reason=profile_unknown / cookie_expired"]
+    V -- ログイン要求 --> E[expired に記録] --> X2[401 cookie_expired]
+    N -- ログイン要求 --> X3[401 cookie_missing]
+```
+
+- 対応の判定は `cookies.resolve_profile(url)`（[../design.md](../design.md) のプロファイルの定義）。
+- 自動で選んだプロファイルも、ジョブ（キューの JSON）の `auth_profile` に入れる。予約（`/schedule`）は、実行時（`/download/scheduled`）に選ぶ。
+- 401 の `login_url` は、プロファイルが決まれば `?profile=<name>`、決まらなければ従来どおり `?start_url=<origin>`。
+- `GET /auth/profiles` は、cookie ファイルのあるプロファイルに、定義の `label` と `domains` を付けて返す。

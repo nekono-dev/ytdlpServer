@@ -41,3 +41,8 @@ flowchart TD
 ### Phase 2: 再ログイン用画面への誘導
 
 - `login_url` は、apiServer と同じ組み立て（`cookies.login_url(profile, url)`）で、ジョブの URL の origin を `start_url` に使う。
+
+### Phase 4: 再ログイン用 URL のプロファイル
+
+- ジョブに `auth_profile` が無いとき、`cookies.resolve_profile(url)` で対応するプロファイルを求め、`login_url` の `profile` に使う。
+- 自動リトライの除外（Phase 1）は、ジョブの `auth_profile` で判定する。自動選択されたプロファイルは API がジョブに入れるため、同じ扱いになる。

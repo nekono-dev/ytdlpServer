@@ -26,7 +26,7 @@ flowchart LR
 |---|---|---|
 | apiServer | probe 時に cookie を使う。ログイン要求を 401 で返す | 実装済み（Phase 1） |
 | workerServer | 実行時に cookie を使う。失効を記録し、リトライ対象から外す | 実装済み（Phase 1） |
-| browserServer | ユーザがログインするブラウザを提供し、cookie を回収して保存する | 実装済み（Phase 2） |
+| browserServer | ユーザがログインするブラウザを提供し、cookie を回収して保存する | 実装済み（Phase 2）。画面配信方式への置き換え（Phase 3）、プリセット・履歴（Phase 4）は実装中 |
 
 ### アプリ間インターフェース: cookie ストア
 
@@ -39,6 +39,19 @@ flowchart LR
 | 権限 | 0600 |
 | 書き込み | 更新は一時ファイルへ書いてから置き換える（読み手に途中状態を見せない） |
 | 書き手 | browserServer（ログイン時の新規・更新）、apiServer / workerServer（yt-dlp が更新した cookie の書き戻し） |
+
+### アプリ間インターフェース: プロファイルの定義（Phase 4）
+
+プロファイルは「名前・表示名・開始 URL・対象ドメイン」の組。3 アプリが同じ定義を読む。
+
+| 種類 | 置き場所 | 書き手 |
+|---|---|---|
+| プリセット | 各アプリの `src/presets.json`（3 アプリで同一内容。一致はテストで確認する） | 開発者（リポジトリ） |
+| 履歴 | `COOKIE_DIR/profiles.json`（cookie ストア内、0600） | browserServer（ユーザが新しいサイトで保存したとき追加、削除操作で削除） |
+
+- 対象ドメインは、保存する cookie の絞り込み（browserServer）と、URL からのプロファイルの自動選択（apiServer・workerServer）の両方に使う。
+- URL のホストが、対象ドメインと同じか、その配下なら一致とする。プリセットを先に、次に履歴を見る。
+- 定義を読む処理は `cookies.py` に置く（3 アプリ同一）。
 
 ### プロファイルの状態
 
@@ -59,3 +72,5 @@ flowchart LR
 | 共有はファイルで行い、Redis に cookie を入れない | Redis は Redis Insight から見えるため（R8） |
 | yt-dlp には一時コピーを渡し、更新分だけ書き戻す | yt-dlp は cookie ファイルを書き換える。並列ジョブで途中状態を読ませないため |
 | `cookies.py` は 3 アプリに同一内容で置く | 既存の `with_youtube_defaults` と同じ運用。同一性はテストで確認する |
+| プロファイルをサイト単位とし、URL から自動で選ぶ（Phase 4） | アカウントの使い分けの要件が無い。既存の呼び出し（iOS ショートカット等）を変えずに cookie を使えるようにするため |
+| プリセットは `presets.json`（リポジトリ同梱）、ユーザの追加分は cookie ストア内の `profiles.json` に分ける | プリセットの更新（リポジトリ）と、ユーザのデータ（ボリューム）を混ぜないため |
