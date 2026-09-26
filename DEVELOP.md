@@ -45,7 +45,7 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 | [apiServer/](apiServer/)                                                   | API サーバ（Flask + waitress）。`src/main.py`（ルーティング）、`src/function.py`（yt-dlp 解析・ジョブ生成） |
 | [workerServer/](workerServer/)                                             | Worker。`src/main.py`（キュー処理・状態遷移）、`src/function.py`（yt-dlp 実行） |
 | `*/src/cookies.py`                                                         | cookie プロファイルの共通処理（API・Worker・browserServer で**同一内容**。一部だけ直さない） |
-| [browserServer/](browserServer/)                                           | ログイン用ブラウザ（Chromium + noVNC）と cookie 回収。`src/main.py`（操作画面・制御 API）、`src/session.py`（状態管理）、`src/runtime.py`（ブラウザ制御）、`src/netscape.py`（cookie の絞り込み・変換） |
+| [browserServer/](browserServer/)                                           | ログイン用ブラウザ（Chromium、画面は CDP で配信）と cookie 回収。`src/main.py`（操作画面・制御 API・WebSocket、aiohttp）、`src/session.py`（状態管理）、`src/browser.py`（ブラウザ制御・画面配信・入力）、`src/netscape.py`（cookie の絞り込み・変換） |
 | [tests/](tests/)                                                           | 単体テスト（標準 `unittest`）                                     |
 | [specs/](specs/)                                                           | 要件・設計・タスク（仕様駆動開発）。全体用と、アプリ別（`apiServer/` `workerServer/` `browserServer/`） |
 | `*/yt-dlp.conf`                                                            | イメージ内の `/etc/yt-dlp.conf` になる yt-dlp 共通設定            |
@@ -170,7 +170,6 @@ docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download 
 | 変数            | 既定値      | 内容                                                  |
 | --------------- | ----------- | ----------------------------------------------------- |
 | PORT            | `8080`      | 操作画面・制御 API のポート                           |
-| NOVNC_PORT      | `6080`      | noVNC のポート（操作画面が iframe で埋め込む）        |
 | SESSION_TIMEOUT | `900`       | ログイン操作の自動終了までの秒数                      |
 | COOKIE_DIR      | `/cookies`  | cookie プロファイルの置き場所                         |
 
@@ -384,7 +383,7 @@ python3 -m unittest discover -s tests -v
 
 - `tests/test_cookies.py`: 共通処理（判定・禁止オプション・書き戻し・状態）。API と Worker の `cookies.py` が同一であることも確認する。
 - `tests/test_api.py` / `tests/test_worker.py`: 401 応答、予約の保持、リトライ除外、ログの伏せ字など。
-- `tests/test_browser.py`: cookie の絞り込み・変換、セッションの状態遷移（排他・タイムアウト・失敗時の破棄）、制御 API。Chromium と CDP は差し替える。
+- `tests/test_browser.py`: cookie の絞り込み・変換、入力の CDP への変換、セッションの状態遷移（排他・タイムアウト・失敗時の破棄）、制御 API と WebSocket。Chromium と CDP は差し替える。
 
 ## Lint
 

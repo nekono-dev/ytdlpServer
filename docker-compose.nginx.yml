@@ -51,7 +51,6 @@ services:
     init: true
     ports:
       - 8080:8080
-      - 6080:6080
     restart: always
   redis-insight:
     image: redislabs/redisinsight:latest

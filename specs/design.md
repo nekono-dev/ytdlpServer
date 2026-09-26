@@ -26,7 +26,7 @@ flowchart LR
 |---|---|---|
 | apiServer | probe 時に cookie を使う。ログイン要求を 401 で返す | 実装済み（Phase 1） |
 | workerServer | 実行時に cookie を使う。失効を記録し、リトライ対象から外す | 実装済み（Phase 1） |
-| browserServer | ユーザがログインするブラウザを提供し、cookie を回収して保存する | 実装済み（Phase 2）。画面配信方式への置き換え（Phase 3）、プリセット・履歴（Phase 4）は実装中 |
+| browserServer | ユーザがログインするブラウザを提供し、cookie を回収して保存する | 実装済み（Phase 2・3）。プリセット・履歴（Phase 4）は実装中 |
 
 ### アプリ間インターフェース: cookie ストア
 

@@ -1,67 +1,114 @@
 from __future__ import annotations
 
+import contextlib
+import json
 import os
-import signal
-import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, request
-from runtime import ChromiumRuntime
+from aiohttp import WSMsgType, web
+from browser import ChromiumBrowser
 from session import SessionError, SessionManager
-from waitress import serve
-
-app = Flask(__name__)
-app.json.ensure_ascii = False
 
 PORT = int(os.environ.get("PORT", "8080"))
-NOVNC_PORT = int(os.environ.get("NOVNC_PORT", "6080"))
 SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "900"))
-
-manager = SessionManager(ChromiumRuntime(NOVNC_PORT), SESSION_TIMEOUT)
 INDEX_HTML = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
 
-
-@app.errorhandler(SessionError)
-def handle_session_error(e: SessionError) -> tuple[Response, int]:
-    return jsonify({"message": e.message}), e.status
+Handler = Callable[[web.Request], Awaitable[web.StreamResponse]]
 
 
-@app.route("/", methods=["GET"])
-def index() -> Response:
-    return Response(INDEX_HTML, mimetype="text/html")
+@web.middleware
+async def session_errors(request: web.Request, handler: Handler) -> web.StreamResponse:
+    try:
+        return await handler(request)
+    except SessionError as e:
+        return web.json_response({"message": e.message}, status=e.status)
 
 
-@app.route("/session", methods=["GET"])
-def get_session() -> tuple[Response, int]:
-    return jsonify(manager.info()), 200
-
-
-@app.route("/session", methods=["POST"])
-def start_session() -> tuple[Response, int]:
-    form = request.get_json(silent=True)
+async def read_json(request: web.Request) -> dict:
+    try:
+        form = await request.json()
+    except Exception:
+        form = None
     if not isinstance(form, dict):
-        return jsonify({"message": "Invalid request."}), 400
-    return jsonify(manager.start(form.get("profile"), form.get("start_url"))), 200
+        raise SessionError(400, "Invalid request.")
+    return form
 
 
-@app.route("/session/commit", methods=["POST"])
-def commit_session() -> tuple[Response, int]:
-    return jsonify(manager.commit()), 200
+def manager_of(request: web.Request) -> SessionManager:
+    return request.app["manager"]
 
 
-@app.route("/session", methods=["DELETE"])
-def cancel_session() -> tuple[Response, int]:
-    manager.cancel()
-    return jsonify({"message": "Cancelled."}), 200
+async def index(_: web.Request) -> web.Response:
+    return web.Response(text=INDEX_HTML, content_type="text/html")
 
 
-def _shutdown(*_args: object) -> None:
-    # コンテナ停止時に、ブラウザとプロファイルを残さない
-    manager.runtime.stop()
-    sys.exit(0)
+async def get_session(request: web.Request) -> web.Response:
+    return web.json_response(manager_of(request).info())
+
+
+async def start_session(request: web.Request) -> web.Response:
+    form = await read_json(request)
+    info = await manager_of(request).start(
+        form.get("profile"), form.get("start_url"), mobile=form.get("mobile") is True)
+    return web.json_response(info)
+
+
+async def commit_session(request: web.Request) -> web.Response:
+    return web.json_response(await manager_of(request).commit())
+
+
+async def cancel_session(request: web.Request) -> web.Response:
+    await manager_of(request).cancel()
+    return web.json_response({"message": "Cancelled."})
+
+
+async def screen(request: web.Request) -> web.WebSocketResponse:
+    """画面配信と入力。ログイン操作の実行中だけ使える。"""
+    ws = web.WebSocketResponse(max_msg_size=1 << 20, heartbeat=30)
+    await ws.prepare(request)
+    browser = manager_of(request).browser
+    if browser is None:
+        await ws.close()
+        return ws
+    browser.clients.add(ws)
+    with contextlib.suppress(Exception):
+        url = getattr(browser, "url", "")
+        await ws.send_str(json.dumps({"type": "url", "url": url}))
+    try:
+        async for msg in ws:
+            if msg.type != WSMsgType.TEXT:
+                continue
+            try:
+                await browser.handle_input(json.loads(msg.data), ws)
+            except Exception as e:
+                print("WARNING: input failed:", e)
+    finally:
+        browser.clients.discard(ws)
+    return ws
+
+
+def create_app(manager: SessionManager) -> web.Application:
+    app = web.Application(middlewares=[session_errors])
+    app["manager"] = manager
+    app.add_routes([
+        web.get("/", index),
+        web.get("/session", get_session),
+        web.post("/session", start_session),
+        web.post("/session/commit", commit_session),
+        web.delete("/session", cancel_session),
+        web.get("/ws", screen),
+    ])
+
+    async def on_shutdown(_: web.Application) -> None:
+        # コンテナ停止時に、ブラウザとプロファイルを残さない
+        with contextlib.suppress(Exception):
+            await manager.cancel()
+    app.on_shutdown.append(on_shutdown)
+    return app
 
 
 if __name__ == "__main__":
-    signal.signal(signal.SIGTERM, _shutdown)
     print("INFO: Start browserServer port:", PORT)
-    serve(app, host="0.0.0.0", port=PORT)
+    web.run_app(create_app(SessionManager(ChromiumBrowser, SESSION_TIMEOUT)),
+                host="0.0.0.0", port=PORT, print=None)

@@ -2,64 +2,85 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content">
 <title>ブラウザでログイン</title>
 <style>
-  :root { --bg:#fff; --fg:#1a1a1a; --sub:#666; --line:#d0d0d0; --accent:#0b62d6; --ok:#137333; --err:#b3261e; }
+  :root { --bg:#fff; --fg:#1a1a1a; --sub:#666; --line:#d0d0d0; --accent:#0b62d6; --ok:#137333; --err:#b3261e; --screen:#888; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#161616; --fg:#e8e8e8; --sub:#a0a0a0; --line:#3a3a3a; --accent:#6ea8fe; --ok:#7bd88f; --err:#ff8a80; }
+    :root { --bg:#161616; --fg:#e8e8e8; --sub:#a0a0a0; --line:#3a3a3a; --accent:#6ea8fe; --ok:#7bd88f; --err:#ff8a80; --screen:#444; }
   }
-  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:15px/1.6 system-ui,sans-serif; }
-  main { max-width:1320px; margin:0 auto; }
-  h1 { font-size:20px; margin:0 0 12px; }
-  label { display:block; margin:10px 0 2px; color:var(--sub); font-size:13px; }
-  input { width:100%; max-width:520px; box-sizing:border-box; padding:8px; border:1px solid var(--line);
-          border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; }
-  button { padding:8px 16px; margin-right:8px; border:1px solid var(--line); border-radius:6px;
-           background:var(--bg); color:var(--fg); font:inherit; cursor:pointer; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui,sans-serif; }
+  body.running { overflow:hidden; }
+  #form { padding:16px; max-width:560px; margin:0 auto; }
+  h1 { font-size:18px; margin:0 0 8px; }
+  label { display:block; margin:12px 0 2px; color:var(--sub); font-size:13px; }
+  input, select { box-sizing:border-box; padding:8px; border:1px solid var(--line); border-radius:6px;
+                  background:var(--bg); color:var(--fg); font:16px system-ui; }
+  #form input, #form select { width:100%; }
+  button { padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg);
+           color:var(--fg); font:14px system-ui; white-space:nowrap; cursor:pointer; }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.on { outline:2px solid var(--accent); }
   button:disabled { opacity:.5; cursor:default; }
-  #bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; }
-  #msg { min-height:1.6em; margin:8px 0; }
-  #msg.ok { color:var(--ok); } #msg.err { color:var(--err); }
-  iframe { width:100%; height:calc(100vh - 170px); min-height:480px; border:1px solid var(--line); border-radius:6px; }
   .hint { color:var(--sub); font-size:13px; }
+  #running { position:fixed; left:0; top:0; right:0; display:flex; flex-direction:column; background:var(--bg); }
+  .bar { display:flex; gap:6px; align-items:center; padding:4px 6px; overflow-x:auto; flex:none; }
+  .bar input { flex:1; min-width:80px; padding:6px; }
+  #url { font-size:11px; color:var(--sub); padding:0 8px 2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:none; }
+  #screen { flex:1; position:relative; overflow:hidden; border-top:1px solid var(--line); background:var(--screen); }
+  canvas { position:absolute; left:0; top:0; touch-action:none; }
+  #kbd { position:absolute; left:0; bottom:0; width:1px; height:1px; opacity:0; font-size:16px; border:0; padding:0; resize:none; }
+  .msg { padding:2px 8px; min-height:1.4em; font-size:13px; }
+  .msg.ok { color:var(--ok); } .msg.err { color:var(--err); }
+  .sub { color:var(--sub); font-size:12px; white-space:nowrap; }
   [hidden] { display:none !important; }
 </style>
 </head>
 <body>
-<main>
+<section id="form">
   <h1>ブラウザでログイン</h1>
+  <p class="hint">サーバ上のブラウザで、ログインするサイトを開きます。ログインが終わったら「保存」を押すと、cookie がプロファイルとして保存されます。</p>
+  <label for="profile">プロファイル名（英数字・-・_）</label>
+  <input id="profile" autocomplete="off" placeholder="例: nico">
+  <label for="start_url">開始 URL（ログインするサイト）</label>
+  <input id="start_url" autocomplete="off" inputmode="url" placeholder="例: https://account.nicovideo.jp/login">
+  <p><button id="start" class="primary">ログイン用ブラウザを開く</button></p>
+  <div id="msg0" class="msg" role="status"></div>
+</section>
 
-  <section id="form">
-    <p class="hint">プロファイル名と開始 URL を指定して開始し、表示されたブラウザでログインします。
-      ログインが終わったら「cookie を保存」を押してください。</p>
-    <label for="profile">プロファイル名（英数字・-・_）</label>
-    <input id="profile" autocomplete="off" placeholder="例: nico">
-    <label for="start_url">開始 URL（ログインするサイト）</label>
-    <input id="start_url" autocomplete="off" placeholder="例: https://account.nicovideo.jp/login">
-    <p><button id="start" class="primary">ログイン用ブラウザを開く</button></p>
-  </section>
+<section id="running" hidden>
+  <div class="bar">
+    <button id="commit" class="primary">保存</button>
+    <button id="cancel">中止</button>
+    <button id="back" title="戻る">←</button>
+    <button id="reload" title="再読み込み">↻</button>
+    <button id="kbtn" title="キーボード">⌨</button>
+    <button id="pbtn" title="貼り付けて送る">貼付</button>
+    <span class="sub"><b id="p"></b> 残り <span id="remain"></span></span>
+  </div>
+  <div class="bar" id="pastebar" hidden>
+    <input id="ptext" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="入力欄をタップしてから、貼り付けて送信">
+    <button id="psend">送信</button>
+  </div>
+  <div id="url"></div>
+  <div id="msg" class="msg" role="status"></div>
+  <div id="screen">
+    <canvas id="cv"></canvas>
+    <textarea id="kbd" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="キーボード入力"></textarea>
+  </div>
+</section>
 
-  <section id="running" hidden>
-    <div id="bar">
-      <button id="commit" class="primary">cookie を保存</button>
-      <button id="cancel">キャンセル</button>
-      <span>プロファイル: <b id="p"></b></span>
-      <span class="hint">残り <span id="remain"></span></span>
-    </div>
-    <div id="msg2" class="hint">ログインが終わったら「cookie を保存」を押します。</div>
-    <iframe id="vnc" title="ログイン用ブラウザ"></iframe>
-  </section>
-
-  <div id="msg" role="status"></div>
-</main>
 <script>
 const $ = (id) => document.getElementById(id);
-let state = "idle", vncLoaded = false;
+const cv = $("cv"), ctx = cv.getContext("2d"), kbd = $("kbd");
+// タッチ端末なら、ページをスマートフォンとして表示し、タッチとして操作を送る
+const MOBILE = window.matchMedia("(pointer: coarse)").matches;
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+let state = "idle", ws = null, vw = 0, vh = 0;
 
-function say(text, cls) { $("msg").textContent = text || ""; $("msg").className = cls || ""; }
-
+function say(text, cls) {
+  for (const id of ["msg", "msg0"]) { $(id).textContent = text || ""; $(id).className = "msg " + (cls || ""); }
+}
 async function api(method, path, body) {
   const r = await fetch(path, { method, headers: {"Content-Type": "application/json"},
                                 body: body ? JSON.stringify(body) : undefined });
@@ -67,38 +88,161 @@ async function api(method, path, body) {
   if (!r.ok) throw new Error(data.message || ("エラー (" + r.status + ")"));
   return data;
 }
+function send(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 
+// ---- 表示領域: キーボードの表示で縮んだ分も、リモートの画面サイズに反映する ----
+function layout() {
+  const h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  $("running").style.height = h + "px";
+  window.scrollTo(0, 0);
+  const r = $("screen").getBoundingClientRect();
+  const w = Math.floor(r.width), hh = Math.floor(r.height);
+  if (w < 50 || hh < 50) return;
+  cv.style.width = w + "px"; cv.style.height = hh + "px";
+  if (w !== vw || hh !== vh) { vw = w; vh = hh; send({ type: "viewport", width: vw, height: vh, dpr: DPR }); }
+}
+let layoutTimer = null;
+function relayout() { clearTimeout(layoutTimer); layoutTimer = setTimeout(layout, 150); }
+(window.visualViewport || window).addEventListener("resize", relayout);
+window.addEventListener("orientationchange", relayout);
+
+// ---- 画面配信 ----
+function connect() {
+  ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws");
+  ws.binaryType = "blob";
+  ws.onopen = () => { vw = vh = 0; layout(); };
+  ws.onmessage = async (ev) => {
+    if (typeof ev.data !== "string") {
+      const bmp = await createImageBitmap(ev.data);
+      if (cv.width !== bmp.width || cv.height !== bmp.height) { cv.width = bmp.width; cv.height = bmp.height; }
+      ctx.drawImage(bmp, 0, 0); bmp.close();
+      return;
+    }
+    const m = JSON.parse(ev.data);
+    if (m.type === "url") $("url").textContent = m.url || "";
+    else if (m.type === "probe" && m.seq === probeSeq) probeResult = m.editable;
+  };
+  ws.onclose = () => { ws = null; if (state === "running") setTimeout(() => { if (state === "running" && !ws) connect(); }, 1000); };
+}
+
+// ---- タッチ・マウス ----
+const pts = new Map(); let raf = 0, probeSeq = 0, probeResult = null, mouseDown = false;
+function pos(e) { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) * vw / r.width, y: (e.clientY - r.top) * vh / r.height }; }
+function points() { return [...pts.entries()].map(([id, p]) => ({ id, x: p.x, y: p.y })); }
+function probe(p) { probeSeq++; probeResult = null; send({ type: "probe", seq: probeSeq, x: p.x, y: p.y }); }
+cv.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  cv.setPointerCapture(e.pointerId);
+  const p = pos(e);
+  if (!MOBILE) {
+    mouseDown = true; probe(p); send({ type: "mouse", phase: "down", x: p.x, y: p.y });
+    return;
+  }
+  pts.set(e.pointerId, p);
+  if (pts.size === 1) probe(p);
+  send({ type: "touch", phase: pts.size === 1 ? "start" : "move", points: points() });
+});
+cv.addEventListener("pointermove", (e) => {
+  if (!MOBILE) {
+    const p = pos(e);
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; send({ type: "mouse", phase: "move", x: p.x, y: p.y, pressed: mouseDown }); });
+    return;
+  }
+  if (!pts.has(e.pointerId)) return;
+  pts.set(e.pointerId, pos(e));
+  if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (pts.size) send({ type: "touch", phase: "move", points: points() }); });
+});
+function pointerUp(e) {
+  if (!MOBILE) {
+    if (!mouseDown) return;
+    mouseDown = false; const p = pos(e);
+    send({ type: "mouse", phase: "up", x: p.x, y: p.y });
+    focusByProbe();
+    return;
+  }
+  if (!pts.has(e.pointerId)) return;
+  pts.delete(e.pointerId);
+  send({ type: "touch", phase: pts.size ? "move" : (e.type === "pointercancel" ? "cancel" : "end"), points: points() });
+  if (!pts.size) focusByProbe();
+}
+cv.addEventListener("pointerup", pointerUp);
+cv.addEventListener("pointercancel", pointerUp);
+cv.addEventListener("touchend", focusByProbe);  // iOS はタッチ操作の中でしかキーボードを出せない
+cv.addEventListener("wheel", (e) => {
+  e.preventDefault(); const p = pos(e);
+  send({ type: "wheel", x: p.x, y: p.y, dx: e.deltaX, dy: e.deltaY });
+}, { passive: false });
+cv.addEventListener("contextmenu", (e) => e.preventDefault());
+
+// 入力欄をタップしたら端末のキーボードを出し、入力欄以外なら閉じる
+function focusByProbe() {
+  if (probeResult === true) { if (document.activeElement !== kbd) { kbd.focus({ preventScroll: true }); resetKbd(); } }
+  else if (probeResult === false && document.activeElement === kbd && MOBILE) kbd.blur();
+  else if (!MOBILE && document.activeElement !== kbd) { kbd.focus({ preventScroll: true }); resetKbd(); }
+  $("kbtn").classList.toggle("on", document.activeElement === kbd);
+}
+
+// ---- 文字入力: テキスト欄の差分を送る(日本語入力は確定時) ----
+const SENT = "  ";   // 空の欄では削除キーが届かない端末があるため、番兵の文字を置く
+let composing = false;
+function resetKbd() { kbd.value = SENT; kbd.setSelectionRange(SENT.length, SENT.length); }
+function flush() {
+  const v = kbd.value;
+  if (v.length < SENT.length) {
+    for (let i = v.length; i < SENT.length; i++) send({ type: "key", key: "Backspace" });
+  } else if (v.startsWith(SENT)) {
+    v.slice(SENT.length).split(/(\n)/).forEach((s) => {
+      if (s === "\n") send({ type: "key", key: "Enter" }); else if (s) send({ type: "text", text: s });
+    });
+  } else if (v) {
+    send({ type: "text", text: v.replace(/ /g, "") });
+  }
+  resetKbd();
+}
+const PASS_KEYS = new Set(["Enter", "Tab", "Escape", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
+kbd.addEventListener("compositionstart", () => { composing = true; });
+kbd.addEventListener("compositionend", () => { composing = false; flush(); });
+kbd.addEventListener("input", (e) => { if (!composing && !e.isComposing) flush(); });
+kbd.addEventListener("keydown", (e) => {
+  if (composing || e.isComposing) return;
+  if (PASS_KEYS.has(e.key)) { e.preventDefault(); send({ type: "key", key: e.key }); }
+});
+kbd.addEventListener("blur", () => $("kbtn").classList.remove("on"));
+$("kbtn").onclick = () => {
+  if (document.activeElement === kbd) kbd.blur(); else { kbd.focus({ preventScroll: true }); resetKbd(); }
+  $("kbtn").classList.toggle("on", document.activeElement === kbd);
+};
+
+// ---- 貼り付け(パスワードマネージャからのコピー等) ----
+$("pbtn").onclick = () => { $("pastebar").hidden = !$("pastebar").hidden; relayout(); };
+$("psend").onclick = () => { const t = $("ptext").value; if (t) { send({ type: "text", text: t }); $("ptext").value = ""; } };
+$("ptext").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); $("psend").onclick(); } });
+
+// ---- 操作 ----
 function render(s) {
   const running = s.state === "running" || s.state === "committing";
   $("form").hidden = running; $("running").hidden = !running;
+  document.body.classList.toggle("running", running);
   $("commit").disabled = $("cancel").disabled = s.state !== "running";
   if (running) {
     $("p").textContent = s.profile || "";
-    const m = Math.floor(s.remaining / 60), sec = String(s.remaining % 60).padStart(2, "0");
-    $("remain").textContent = m + ":" + sec;
-    if (!vncLoaded) {
-      $("vnc").src = location.protocol + "//" + location.hostname + ":" + s.novnc_port +
-                     "/vnc.html?autoconnect=true&resize=scale&reconnect=true";
-      vncLoaded = true;
-    }
+    $("remain").textContent = Math.floor(s.remaining / 60) + ":" + String(s.remaining % 60).padStart(2, "0");
+    if (!ws) connect();
+    relayout();
   } else {
-    if (vncLoaded) { $("vnc").src = "about:blank"; vncLoaded = false; }
-    if (state === "running" && s.state === "idle" && !$("msg").textContent) {
+    if (ws) { ws.close(); ws = null; }
+    if (state === "running" && s.state === "idle" && !$("msg0").textContent) {
       say("ログイン操作が終了しました（時間切れ、または取り消し）。", "err");
     }
   }
   state = s.state;
 }
-
-async function refresh() {
-  try { render(await api("GET", "/session")); } catch (e) { say(e.message, "err"); }
-}
-
+async function refresh() { try { render(await api("GET", "/session")); } catch (e) { say(e.message, "err"); } }
 $("start").onclick = async () => {
   say("");
   try {
     $("start").disabled = true;
-    render(await api("POST", "/session", { profile: $("profile").value.trim(), start_url: $("start_url").value.trim() }));
+    render(await api("POST", "/session", { profile: $("profile").value.trim(), start_url: $("start_url").value.trim(), mobile: MOBILE }));
   } catch (e) { say(e.message, "err"); } finally { $("start").disabled = false; }
 };
 $("commit").onclick = async () => {
@@ -106,15 +250,16 @@ $("commit").onclick = async () => {
   try {
     $("commit").disabled = true;
     const r = await api("POST", "/session/commit");
-    say("保存しました（" + r.domain + " の cookie " + r.saved + " 件）。プロファイル名 “" + r.profile + "” を auth_profile に指定できます。", "ok");
-    await refresh();
-  } catch (e) { say(e.message, "err"); await refresh(); }
+    say("保存しました（" + r.domains.join(", ") + " の cookie " + r.saved + " 件）。プロファイル “" + r.profile + "” が使えます。", "ok");
+  } catch (e) { say(e.message, "err"); }
+  refresh();
 };
 $("cancel").onclick = async () => {
-  say("");
-  try { await api("DELETE", "/session"); say("取り消しました。何も保存していません。"); } catch (e) { say(e.message, "err"); }
-  await refresh();
+  try { await api("DELETE", "/session"); say("中止しました。何も保存していません。"); } catch (e) { say(e.message, "err"); }
+  refresh();
 };
+$("back").onclick = () => send({ type: "nav", action: "back" });
+$("reload").onclick = () => send({ type: "nav", action: "reload" });
 
 const q = new URLSearchParams(location.search);
 if (q.get("profile")) $("profile").value = q.get("profile");

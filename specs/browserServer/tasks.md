@@ -52,17 +52,25 @@
 - プロファイルの削除（操作画面・API）。
 - Alpine インストーラ（Docker 無し構成）への browserServer の組み込み。
 
-## cookie セッション認証（Phase 3: 画面配信方式への置き換え、未着手）
+## cookie セッション認証（Phase 3: 画面配信方式への置き換え、検証完了）
 
-設計は [design.md](design.md)。PoC（A 案）で、スマートフォンでのログインと Turnstile の通過を確認済み。
+設計は [design.md](design.md)。PoC（A 案）で、スマートフォンでのログインと Turnstile の通過を人手で確認済み。
 
-- [ ] aiohttp へ移行し、画面配信（WebSocket）と入力の送信を実装（`src/browser.py`、`src/session.py`、`src/main.py`）
-- [ ] ヘッドあり（Xvfb）で起動し、タッチ端末では起動フラグでモバイル UA にする
-- [ ] 操作画面（canvas、タッチ・マウス、キーボード、貼り付け、戻る・再読み込み）
-- [ ] noVNC 一式（x11vnc・novnc・websockify、6080）を削除。compose・Dockerfile を更新
-- [ ] 単体テスト（状態遷移、入力の変換、保存）
-- [ ] README・DEVELOP.md を更新
-- [ ] 実機検証（モックサイトでの保存、Turnstile の通過、タブの追従、6080 と 9222 が LAN から届かないこと、待機中の負荷）
+- [x] aiohttp へ移行し、画面配信（WebSocket）と入力の送信を実装（`src/browser.py`、`src/session.py`、`src/main.py`）
+- [x] ヘッドあり（Xvfb）で起動し、タッチ端末では起動フラグでモバイル UA にする
+- [x] 操作画面（canvas、タッチ・マウス、キーボード、貼り付け、戻る・再読み込み）
+- [x] noVNC 一式（x11vnc・novnc・websockify、6080）を削除。compose・Dockerfile を更新
+- [x] 単体テスト（状態遷移、入力の変換、保存、WebSocket）
+- [x] README・DEVELOP.md を更新
+- [x] 実機検証
+
+検証: 検証サーバ（Ubuntu 24.04、Docker Compose）で、実 Chromium を WebSocket 経由で操作して実施。
+- スマートフォン表示（390x700、dpr 2）: ニコニコのログイン画面で画面配信（10 秒で 99 フレーム）、入力欄の判定が `true`、Turnstile をタップして Success。
+- PC 表示（1000x700）: マウスクリックでリンク先へ遷移、戻るで元のページへ戻る。
+- ポップアップ: `target=_blank` のリンクをタップすると新しいタブへ表示と URL が切り替わり、日本語の文字入力が入る。モックサイトで保存（3 件、0600）し、API から取得できた。
+- 後片付け: 保存後、ブラウザ系プロセス 0・`/tmp` に残骸なし。待機中は約 40MiB。LAN から 6080・9222 は到達不可。ログ・Redis に cookie の値なし。
+- 実装中に判明し対処した事項: ナビゲーション中の画面配信の開始失敗（再試行と読み込み完了時の再開）、終了後の子プロセスによるプロファイルの残骸（プロセスグループでの終了、TMPDIR、削除の再試行）。
+既知の未検証事項: 製品版での実スマートフォンの操作（PoC で確認した方式と同じ）、iOS でのキーボードの自動表示。
 
 ## cookie セッション認証（Phase 4: プロファイルのプリセットと履歴、未着手）
 
