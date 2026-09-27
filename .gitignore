@@ -161,3 +161,10 @@ cython_debug/
 
 # cookie プロファイル(ログインセッション。パスワード同等のため絶対にコミットしない)
 /cookies/
+
+# install/setup.sh がリポジトリ直下 (INSTALL_DIR) に展開するランタイム成果物
+/bin/
+/pot-provider/
+/redisinsight/
+/ri-build*
+/ytdlp/

@@ -1,32 +1,38 @@
 #!/bin/sh
-# ytdlpServer を Alpine Linux (LXC / ベアメタル) へ Docker 無しでインストールする。
-#
-# 使い方 (root):
-#   wget -qO- <URL>/install-alpine.sh | sh
-#   WORKER_MAX=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
+# ytdlpServer を Alpine Linux (LXC / ベアメタル) へ Docker 無しでインストールする本体インストーラ。
+# 通常は頒布される install.sh (ブートストラップ層) 経由で実行される:
+#   curl -fsSL <頒布URL>/install.sh | sudo sh -s -- [引数]
+# ソースを取得済みの場合は、このスクリプトを直接実行してもよい:
+#   WORKER_MAX=4 DOWNLOAD_DIR=/mnt/video sh install/setup.sh
 #
 # 何度実行しても同じ結果になる (冪等)。設定は環境変数で上書きでき、
 # /etc/conf.d/ytdlpserver に保存される。再実行時は保存済みの値を引き継ぐ。
 set -eu
 
-# ---- 埋め込み値 (CI が書き換える) -------------------------------------------
-REPO_URL_DEFAULT="https://github.com/nekono-dev/ytdlpServer"
-REPO_REF_DEFAULT="main"
-CF_VERSION_DEFAULT="2025.8.1"
-CF_SHA256_AMD64_DEFAULT=""
-CF_SHA256_ARM64_DEFAULT=""
-RI_VERSION_DEFAULT="3.8.0"
+# ---- 設定スキーマの版 (人手で管理) -------------------------------------------
+# REDIS_INSIGHT_VERSION など「リリースに追従させたい既定値」を変えた、
+# または /etc/conf.d/ytdlpserver の項目を変えた (追加・削除) ときに 1 上げる。
+# 保存済みの版より上がっていれば、アップデートとみなして既定値の追従・旧項目の削除を行う。
+SCRIPT_SCHEMA_VERSION=2
 # -----------------------------------------------------------------------------
 
 CONF_FILE="/etc/conf.d/ytdlpserver"
 
 usage() {
 	cat <<'EOF'
-使い方: install-alpine.sh [-h|--help]
+使い方: install/setup.sh [-h|--help|--uninstall]
+
+オプション引数:
+  --uninstall  アプリ本体だけを削除する (設定・cookie・Redis のデータ・動画の保存先は残す)。
+               続けて新しいインストーラを実行すれば、設定を引き継いでバージョンアップできる
+
+アップデート: 最新の install.sh を取得して再実行するだけでよい
+  (curl -fsSL <頒布URL>/install.sh | sudo sh -s --)。REDIS_INSIGHT_VERSION など
+  リリースに追従する項目は、環境変数で明示しない限り新しいインストーラの既定値に
+  自動で切り替わる。使われなくなった設定 (旧バージョンの名残) は、実行時に警告を
+  出して自動で削除される
 
 環境変数 (既定値):
-  REPO_URL          取得元リポジトリ
-  REPO_REF          ブランチまたはタグ (埋め込み値)
   INSTALL_DIR       /opt/ytdlpserver
   DOWNLOAD_DIR      /mnt          動画の保存先
   COOKIE_DIR        $INSTALL_DIR/cookies  cookie プロファイルの保存先 (ログインセッション)
@@ -47,6 +53,15 @@ usage() {
   INPROGRESS_STALE  21600         所有者不明の in_progress を回収するまでの時間 (秒)
 
 オプション (1 で有効):
+  WITH_BROWSER      1 (既定) でログイン用ブラウザ (Chromium、cookie 取得用) を導入。
+                    要 メモリ 2048MB 以上 / ディスク空き 1024MB 程度。満たさない場合は
+                    警告のうえ無効化する (明示的に 1 を指定した場合は警告のみで続行)
+  BROWSER_PORT      8080          ログイン操作画面のポート
+  BROWSER_UI_URL    (自動検出)    API 応答の login_url に使う基準 URL (例 http://<IP>:8080)
+  SESSION_TIMEOUT   900           ログイン操作の自動終了までの秒数
+  BROWSER_LANG      ja,en-US,en   ブラウザの言語 (Accept-Language 等)
+  BROWSER_TZ        Asia/Tokyo    ブラウザのタイムゾーン (サーバの外向き IP の所在地に合わせる。
+                    UTC のままだと X 等でログインが制限される)
   WITH_NGINX        1 で nginx (443, 自己署名証明書) を導入
   SSL_CN            localhost     自己署名証明書の CN
   WITH_CLOUDFLARED  1 で cloudflared を導入 (CLOUDFLARE_TOKEN が必須)
@@ -83,28 +98,110 @@ die() {
 [ "$(id -u)" = "0" ] || die "root で実行してください"
 [ -f /etc/alpine-release ] || die "Alpine Linux 専用です"
 
+# ---- アンインストール --------------------------------------------------------
+# アプリ本体 (venv・pot-provider・yt-dlp・Redis Insight・OpenRC サービス) だけを
+# 削除する。ソース (git 取得先自体)・設定ファイル・cookie (ログインセッション)・
+# Redis のデータ・動画の保存先は残すため、続けて新しいインストーラを実行すれば、
+# 設定を引き継いで安全にバージョンアップできる。
+do_uninstall() {
+	if [ -f "$CONF_FILE" ]; then
+		# shellcheck disable=SC1090
+		. "$CONF_FILE"
+	else
+		warn "$CONF_FILE が見つかりません。既定のパスで削除を試みます"
+	fi
+	INSTALL_DIR="${INSTALL_DIR:-/opt/ytdlpserver}"
+	COOKIE_DIR="${COOKIE_DIR:-$INSTALL_DIR/cookies}"
+	DOWNLOAD_DIR="${DOWNLOAD_DIR:-/mnt}"
+
+	log "アプリ本体をアンインストールします (導入先: $INSTALL_DIR)"
+	for _s in ytdlp-cloudflared ytdlp-redis-ui ytdlp-browser ytdlp-dispatcher ytdlp-api ytdlp-pot; do
+		rc-service "$_s" stop >/dev/null 2>&1 || true
+		rc-update del "$_s" default >/dev/null 2>&1 || true
+		rm -f "/etc/init.d/$_s"
+	done
+	# 旧版 (~v1.2 以前) の worker サービスの残骸
+	for _f in /etc/init.d/ytdlp-worker /etc/init.d/ytdlp-worker.*; do
+		[ -e "$_f" ] || [ -L "$_f" ] || continue
+		_name="$(basename "$_f")"
+		rc-service "$_name" stop >/dev/null 2>&1 || true
+		rc-update del "$_name" default >/dev/null 2>&1 || true
+		rm -f "$_f"
+	done
+
+	rm -rf "${INSTALL_DIR:?}/venv" "${INSTALL_DIR:?}/pot-provider" \
+		"${INSTALL_DIR:?}/bin" "${INSTALL_DIR:?}/redisinsight" "${INSTALL_DIR:?}/ytdlp"
+	rm -rf /etc/yt-dlp/plugins/bgutil
+	rm -f /etc/yt-dlp.conf
+
+	log "アンインストールが完了しました"
+	log "残したもの: ソース ($INSTALL_DIR)・設定 ($CONF_FILE)・cookie ($COOKIE_DIR)・Redis のデータ・動画の保存先 ($DOWNLOAD_DIR)"
+	log "バージョンアップ版を導入する場合は、新しい install.sh を取得して実行してください"
+}
+
+case "${1:-}" in
+--uninstall)
+	do_uninstall
+	exit 0
+	;;
+esac
+
 # ---- 設定の読み込み (環境変数 > 保存済み > 既定値) ---------------------------
 # 環境変数の指定を退避してから保存済みの設定を読み、指定があれば上書きする
-_ENV_KEYS="REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR COOKIE_DIR WORKER_COUNT WORKER_MAX API_PORT POT_PORT \
+_ENV_KEYS="INSTALL_DIR DOWNLOAD_DIR COOKIE_DIR WORKER_COUNT WORKER_MAX API_PORT POT_PORT \
 REDIS_TTL RETRY_COUNT YTDLP_REPO UPDATE_INTERVAL UPDATE_RETRY_INTERVAL UPDATE_COOLDOWN \
 KEEP_VERSIONS DISPATCH_SCAN_INTERVAL LEASE_TTL HEARTBEAT_INTERVAL STOP_GRACE INPROGRESS_STALE \
+WITH_BROWSER BROWSER_PORT BROWSER_UI_URL SESSION_TIMEOUT BROWSER_LANG BROWSER_TZ \
 WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
 WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION RI_BUILD_STORAGE REDIS_UI_HOST"
+_explicit_keys=""
 _saved=""
 for _k in $_ENV_KEYS; do
 	if eval "[ \"\${$_k+set}\" = set ]"; then
 		eval "_v=\$$_k"
+		_explicit_keys="$_explicit_keys $_k"
 		# shellcheck disable=SC2154
 		_saved="$_saved
 $_k=$(printf '%s' "$_v" | sed "s/'/'\\\\''/g; s/^/'/; s/\$/'/")"
 	fi
 done
-# shellcheck disable=SC1090
-[ -f "$CONF_FILE" ] && . "$CONF_FILE"
+_conf_existed=0
+if [ -f "$CONF_FILE" ]; then
+	_conf_existed=1
+	# 保存済みファイルの項目のうち、現在使わなくなったもの (旧バージョンの名残) を検出する。
+	# 削除自体は write_conf が現在の項目だけで書き直すことで行われる。
+	_old_keys="$(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$CONF_FILE" | sed 's/=$//')"
+	for _k in $_old_keys; do
+		case " $_ENV_KEYS _SCHEMA_VERSION " in
+		*" $_k "*) ;;
+		*) warn "使われなくなった設定 $_k を削除します (旧バージョンの名残)" ;;
+		esac
+	done
+	# shellcheck disable=SC1090
+	. "$CONF_FILE"
+fi
 [ -n "$_saved" ] && eval "$_saved"
 
-REPO_URL="${REPO_URL:-$REPO_URL_DEFAULT}"
-REPO_REF="${REPO_REF:-$REPO_REF_DEFAULT}"
+# ---- 版数に応じた既定値の追従 ------------------------------------------------
+# REDIS_INSIGHT_VERSION は一度 CONF_FILE に保存されると、以降は保存済みの値が
+# 再読込されるだけになり、新しいインストーラの既定値に切り替わらない。
+# 導入時より新しいスキーマ版のインストーラで実行された場合は、明示的に環境変数で指定
+# されていない限り、保存済みの値を捨てて新しい既定値を使わせる。
+_prev_schema="${_SCHEMA_VERSION:-0}"
+case "$_prev_schema" in
+'' | *[!0-9]*) _prev_schema=0 ;;
+esac
+if [ "$_prev_schema" -lt "$SCRIPT_SCHEMA_VERSION" ]; then
+	[ "$_conf_existed" = 1 ] &&
+		log "アップデートを検知しました (設定の版: $_prev_schema -> $SCRIPT_SCHEMA_VERSION)。既定値に追従する項目は、明示指定が無ければ最新の既定値を使います"
+	case " $_explicit_keys " in
+	*" REDIS_INSIGHT_VERSION "*) ;;
+	*) unset REDIS_INSIGHT_VERSION ;;
+	esac
+elif [ "$_prev_schema" -gt "$SCRIPT_SCHEMA_VERSION" ]; then
+	warn "導入済みの設定 (版 $_prev_schema) より古いインストーラです (版 $SCRIPT_SCHEMA_VERSION)。既定値の追従は行いません"
+fi
+
 INSTALL_DIR="${INSTALL_DIR:-/opt/ytdlpserver}"
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-/mnt}"
 COOKIE_DIR="${COOKIE_DIR:-$INSTALL_DIR/cookies}"
@@ -132,14 +229,45 @@ WITH_CLOUDFLARED="${WITH_CLOUDFLARED:-0}"
 CLOUDFLARE_TOKEN="${CLOUDFLARE_TOKEN:-}"
 WITH_REDIS_INSIGHT="${WITH_REDIS_INSIGHT:-1}"
 REDIS_UI="${REDIS_UI:-insight}"
-REDIS_INSIGHT_VERSION="${REDIS_INSIGHT_VERSION:-$RI_VERSION_DEFAULT}"
+REDIS_INSIGHT_VERSION="${REDIS_INSIGHT_VERSION:-3.8.0}"
 RI_BUILD_STORAGE="${RI_BUILD_STORAGE:-auto}"
 REDIS_UI_HOST="${REDIS_UI_HOST:-0.0.0.0}"
+
+# サーバの外向き IP (login_url の既定値・完了時の表示に使う)
+_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')"
+
+WITH_BROWSER="${WITH_BROWSER:-1}"
+BROWSER_PORT="${BROWSER_PORT:-8080}"
+SESSION_TIMEOUT="${SESSION_TIMEOUT:-900}"
+BROWSER_LANG="${BROWSER_LANG:-ja,en-US,en}"
+BROWSER_TZ="${BROWSER_TZ:-Asia/Tokyo}"
+# login_url の基準 URL。既定は検出した外向き IP。検出できなければ空のまま
+# (login_url は返さない。WITH_NGINX/WITH_CLOUDFLARED 経由の URL にしたい場合などは明示指定する)
+[ -n "$_ip" ] && BROWSER_UI_URL="${BROWSER_UI_URL:-http://$_ip:$BROWSER_PORT}"
+BROWSER_UI_URL="${BROWSER_UI_URL:-}"
+
+# ログイン用ブラウザ (Chromium) はメモリ・ディスクを多く使う。実測値を基準に、
+# 満たさない環境では既定 (明示指定なし) の場合のみ自動で無効化する
+if [ "$WITH_BROWSER" = "1" ]; then
+	_browser_mem_mb="$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)"
+	_browser_disk_mb="$(df -Pm / | awk 'NR==2 {print $4}')"
+	if [ "$_browser_mem_mb" -lt 2048 ] || [ "$_browser_disk_mb" -lt 1024 ]; then
+		case " $_explicit_keys " in
+		*" WITH_BROWSER "*)
+			warn "リソースが少ない環境です (メモリ ${_browser_mem_mb}MB・ディスク空き ${_browser_disk_mb}MB)。ログイン用ブラウザ (Chromium) にはメモリ 2048MB・ディスク空き 1024MB 程度を推奨します"
+			;;
+		*)
+			warn "リソース不足のため、ログイン用ブラウザ (Chromium) の導入を無効にします (メモリ ${_browser_mem_mb}MB・ディスク空き ${_browser_disk_mb}MB)。使う場合は WITH_BROWSER=1 を明示してください"
+			WITH_BROWSER=0
+			;;
+		esac
+	fi
+fi
 
 # 数値の検証
 for _k in WORKER_MAX API_PORT POT_PORT REDIS_TTL RETRY_COUNT UPDATE_INTERVAL \
 	UPDATE_RETRY_INTERVAL UPDATE_COOLDOWN KEEP_VERSIONS DISPATCH_SCAN_INTERVAL \
-	LEASE_TTL HEARTBEAT_INTERVAL STOP_GRACE INPROGRESS_STALE; do
+	LEASE_TTL HEARTBEAT_INTERVAL STOP_GRACE INPROGRESS_STALE BROWSER_PORT SESSION_TIMEOUT; do
 	eval "_v=\$$_k"
 	case "$_v" in
 	'' | *[!0-9]*) die "$_k は数値で指定してください: $_v" ;;
@@ -165,7 +293,10 @@ if [ "$WITH_CLOUDFLARED" = "1" ] && [ -z "$CLOUDFLARE_TOKEN" ]; then
 	die "WITH_CLOUDFLARED=1 には CLOUDFLARE_TOKEN が必要です"
 fi
 
-SRC_DIR="$INSTALL_DIR/src"
+# ソース (このスクリプト自身が置かれている git 取得先) は INSTALL_DIR 直下に展開済み
+# (install.sh がここへ clone してから install/setup.sh を実行する)。venv・bin・
+# redisinsight・ytdlp・pot-provider・cookies は INSTALL_DIR 直下の兄弟ディレクトリに置く
+# (いずれも .gitignore で除外済み)。
 VENV_DIR="$INSTALL_DIR/venv"
 POT_DIR="$INSTALL_DIR/pot-provider"
 BIN_DIR="$INSTALL_DIR/bin"
@@ -182,10 +313,12 @@ write_conf() {
 	mkdir -p "$(dirname "$CONF_FILE")"
 	umask 077
 	{
-		echo "# ytdlpserver の設定 (install-alpine.sh が生成)。編集後は再起動すること。"
-		for _k in REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR COOKIE_DIR WORKER_MAX API_PORT POT_PORT \
+		echo "# ytdlpserver の設定 (install/setup.sh が生成)。編集後は再起動すること。"
+		echo "_SCHEMA_VERSION=$(q "$SCRIPT_SCHEMA_VERSION")"
+		for _k in INSTALL_DIR DOWNLOAD_DIR COOKIE_DIR WORKER_MAX API_PORT POT_PORT \
 			REDIS_TTL RETRY_COUNT YTDLP_REPO UPDATE_INTERVAL UPDATE_RETRY_INTERVAL UPDATE_COOLDOWN \
 			KEEP_VERSIONS DISPATCH_SCAN_INTERVAL LEASE_TTL HEARTBEAT_INTERVAL STOP_GRACE INPROGRESS_STALE \
+			WITH_BROWSER BROWSER_PORT BROWSER_UI_URL SESSION_TIMEOUT BROWSER_LANG BROWSER_TZ \
 			WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
 			WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION RI_BUILD_STORAGE REDIS_UI_HOST; do
 			eval "_v=\$$_k"
@@ -204,27 +337,14 @@ install_packages() {
 	fi
 	log "パッケージをインストールします"
 	apk update
-	# pot-provider の canvas は musl 向けのビルド済みバイナリが無く、ソースからビルドされる
+	# pot-provider の canvas は musl 向けのビルド済みバイナリが無く、ソースからビルドされる。
+	# jq は cloudflared の最新版取得・ダイジェスト検証に使う
 	apk add --no-cache \
 		python3 py3-pip gcc g++ make pkgconf musl-dev python3-dev libffi-dev \
 		cairo-dev pango-dev pixman-dev libjpeg-turbo-dev giflib-dev librsvg-dev \
-		ffmpeg py3-mutagen nodejs npm git redis openrc ca-certificates wget
+		ffmpeg py3-mutagen nodejs npm git redis openrc ca-certificates wget jq
 	_major="$(node -v | sed 's/^v//; s/\..*//')"
 	[ "$_major" -ge 22 ] || die "pot-provider には Node.js 22 以上が必要です (現在: $(node -v))"
-}
-
-# ---- ソース -----------------------------------------------------------------
-fetch_source() {
-	log "ソースを取得します: $REPO_URL ($REPO_REF)"
-	mkdir -p "$INSTALL_DIR"
-	if [ -d "$SRC_DIR/.git" ]; then
-		git -C "$SRC_DIR" remote set-url origin "$REPO_URL"
-		git -C "$SRC_DIR" fetch --depth 1 origin "$REPO_REF"
-		git -C "$SRC_DIR" checkout -q -f FETCH_HEAD
-	else
-		rm -rf "$SRC_DIR"
-		git clone -q --depth 1 --branch "$REPO_REF" "$REPO_URL" "$SRC_DIR"
-	fi
 }
 
 # ---- Python -----------------------------------------------------------------
@@ -233,12 +353,12 @@ setup_python() {
 	# mutagen は apk 版を使うため system-site-packages を有効にする
 	[ -x "$VENV_DIR/bin/python3" ] || python3 -m venv --system-site-packages "$VENV_DIR"
 	"$VENV_DIR/bin/pip" install --no-cache-dir --upgrade \
-		-r "$SRC_DIR/apiServer/requirements.txt" \
-		-r "$SRC_DIR/workerServer/requirements.txt"
+		-r "$INSTALL_DIR/apiServer/requirements.txt" \
+		-r "$INSTALL_DIR/workerServer/requirements.txt"
 
 	# yt-dlp の設定。Docker のサービス名ではなくローカルの pot-provider を指す
 	sed "s#http://pot-provider:4416#http://127.0.0.1:$POT_PORT#" \
-		"$SRC_DIR/workerServer/yt-dlp.conf" >/etc/yt-dlp.conf
+		"$INSTALL_DIR/workerServer/yt-dlp.conf" >/etc/yt-dlp.conf
 }
 
 # ---- yt-dlp プラグイン (bgutil) -------------------------------------------
@@ -264,7 +384,7 @@ setup_ytdlp() {
 	log "yt-dlp を導入します (導入先: $YTDLP_DIR)"
 	mkdir -p "$YTDLP_DIR"
 	YTDLP_DIR="$YTDLP_DIR" YTDLP_REPO="$YTDLP_REPO" \
-		"$VENV_DIR/bin/python3" "$SRC_DIR/workerServer/src/updater.py"
+		"$VENV_DIR/bin/python3" "$INSTALL_DIR/workerServer/src/updater.py"
 }
 
 # ---- pot-provider -----------------------------------------------------------
@@ -330,8 +450,8 @@ EOF
 # yt-dlp は導入先 (YTDLP_DIR/current) を PATH の先頭にして呼ぶ。
 # 更新は dispatcher が行うため、api 自身は yt-dlp を更新せず、定期再起動もしない。
 export PATH="$YTDLP_DIR/current:\$PATH"
-export REDIS_URL="redis://127.0.0.1:6379" PORT="\$API_PORT" COOKIE_DIR YTDLP_DIR="$YTDLP_DIR"
-cd "$SRC_DIR/apiServer/src"
+export REDIS_URL="redis://127.0.0.1:6379" PORT="\$API_PORT" COOKIE_DIR YTDLP_DIR="$YTDLP_DIR" BROWSER_UI_URL
+cd "$INSTALL_DIR/apiServer/src"
 exec "$VENV_DIR/bin/python3" -u main.py
 EOF
 
@@ -339,11 +459,20 @@ EOF
 #!/bin/sh
 . "$CONF_FILE"
 export PATH="$YTDLP_DIR/current:\$PATH"
-export REDIS_URL="redis://127.0.0.1:6379" REDIS_TTL RETRY_COUNT DOWNLOAD_DIR COOKIE_DIR
+export REDIS_URL="redis://127.0.0.1:6379" REDIS_TTL RETRY_COUNT DOWNLOAD_DIR COOKIE_DIR BROWSER_UI_URL
 export DISPATCH_MODE=process WORKER_MAX DISPATCH_SCAN_INTERVAL LEASE_TTL HEARTBEAT_INTERVAL \\
 	STOP_GRACE INPROGRESS_STALE UPDATE_INTERVAL UPDATE_RETRY_INTERVAL UPDATE_COOLDOWN \\
 	KEEP_VERSIONS YTDLP_REPO YTDLP_DIR="$YTDLP_DIR"
-exec "$VENV_DIR/bin/python3" -u "$SRC_DIR/workerServer/src/dispatcher.py"
+exec "$VENV_DIR/bin/python3" -u "$INSTALL_DIR/workerServer/src/dispatcher.py"
+EOF
+
+	cat >"$BIN_DIR/run-browser" <<EOF
+#!/bin/sh
+. "$CONF_FILE"
+export TZ="\$BROWSER_TZ" BROWSER_LANG COOKIE_DIR
+export PORT="\$BROWSER_PORT" SESSION_TIMEOUT
+cd "$INSTALL_DIR/browserServer/src"
+exec "$VENV_DIR/bin/python3" -u main.py
 EOF
 	chmod 755 "$BIN_DIR"/*
 }
@@ -410,28 +539,45 @@ setup_nginx() {
 	fi
 	# Alpine の nginx は http.d/*.conf を読み込む
 	sed "s#http://api:5000#http://127.0.0.1:$API_PORT#" \
-		"$SRC_DIR/nginx/conf.d/default.conf" >/etc/nginx/http.d/ytdlp.conf
+		"$INSTALL_DIR/nginx/conf.d/default.conf" >/etc/nginx/http.d/ytdlp.conf
 	rm -f /etc/nginx/http.d/default.conf
 	nginx -t
 	enable_and_restart nginx
 }
 
 # ---- オプション: cloudflared ------------------------------------------------
+# 実行時に GitHub Releases から最新版を取得し、GitHub API が返すアセットのダイジェスト
+# (sha256) と照合する (CI 側での版数・ハッシュの事前埋め込みは行わない)。
 setup_cloudflared() {
 	log "cloudflared を設定します"
 	case "$(uname -m)" in
-	x86_64) _arch="amd64"; _sha="$CF_SHA256_AMD64_DEFAULT" ;;
-	aarch64) _arch="arm64"; _sha="$CF_SHA256_ARM64_DEFAULT" ;;
+	x86_64) _arch="amd64" ;;
+	aarch64) _arch="arm64" ;;
 	*) die "cloudflared 未対応のアーキテクチャです: $(uname -m)" ;;
 	esac
-	[ -n "$_sha" ] || die "cloudflared の SHA256 が埋め込まれていません (CI 経由の配布版を使用してください)"
+	_asset="cloudflared-linux-$_arch"
+
+	log "cloudflared の最新版を取得します"
+	_api_json="$(wget -qO- "https://api.github.com/repos/cloudflare/cloudflared/releases/latest")"
+	[ -n "$_api_json" ] || die "cloudflared の版数情報を取得できません"
+	_ver="$(printf '%s' "$_api_json" | jq -r '.tag_name')"
+	_url="$(printf '%s' "$_api_json" | jq -r --arg name "$_asset" '.assets[] | select(.name == $name) | .browser_download_url')"
+	_digest="$(printf '%s' "$_api_json" | jq -r --arg name "$_asset" '.assets[] | select(.name == $name) | (.digest // empty)')"
+	[ -n "$_url" ] || die "cloudflared のダウンロードURLを取得できません ($_asset)"
+
 	_tmp="$(mktemp)"
-	wget -qO "$_tmp" \
-		"https://github.com/cloudflare/cloudflared/releases/download/$CF_VERSION_DEFAULT/cloudflared-linux-$_arch"
-	echo "$_sha  $_tmp" | sha256sum -c - >/dev/null || {
-		rm -f "$_tmp"
-		die "cloudflared の SHA256 が一致しません"
-	}
+	wget -qO "$_tmp" "$_url"
+	case "$_digest" in
+	sha256:*)
+		echo "${_digest#sha256:}  $_tmp" | sha256sum -c - >/dev/null || {
+			rm -f "$_tmp"
+			die "cloudflared の SHA256 が一致しません"
+		}
+		;;
+	*)
+		warn "GitHub API がダイジェストを返さなかったため、cloudflared の SHA256 検証をスキップします (版: $_ver)"
+		;;
+	esac
 	install -m 755 "$_tmp" /usr/local/bin/cloudflared
 	rm -f "$_tmp"
 
@@ -443,6 +589,19 @@ EOF
 	chmod 755 "$BIN_DIR/run-cloudflared"
 	write_initd ytdlp-cloudflared "ytdlpServer Cloudflare Tunnel" "$BIN_DIR/run-cloudflared" "need ytdlp-api"
 	enable_and_restart ytdlp-cloudflared
+}
+
+# ---- オプション: ログイン用ブラウザ (cookie 取得) ---------------------------
+# ヘッドレスは Cloudflare Turnstile 等に弾かれるため、Xvfb を表示先にしてヘッドありで
+# 動かす (Docker 版と同じ構成)。Chromium は musl 向けビルド済みバイナリが apk にあるため、
+# pot-provider や Redis Insight と違い、その場でのビルドは不要。
+setup_browser() {
+	log "ログイン用ブラウザ (Chromium) を導入します"
+	apk add --no-cache chromium xvfb font-noto-cjk tzdata
+	"$VENV_DIR/bin/pip" install --no-cache-dir --upgrade \
+		-r "$INSTALL_DIR/browserServer/requirements.txt"
+	write_initd ytdlp-browser "ytdlpServer login browser (Chromium)" "$BIN_DIR/run-browser" ""
+	enable_and_restart ytdlp-browser
 }
 
 # ---- オプション: redis-commander -------------------------------------------
@@ -603,7 +762,6 @@ setup_redis_ui() {
 # ---- 実行 -------------------------------------------------------------------
 write_conf
 install_packages
-fetch_source
 setup_python
 setup_plugins
 setup_ytdlp
@@ -615,15 +773,16 @@ setup_services
 # 起動順: redis → pot-provider → api / dispatcher (worker は dispatcher が起動する)
 enable_and_restart redis ytdlp-pot ytdlp-api ytdlp-dispatcher
 
+[ "$WITH_BROWSER" = "1" ] && setup_browser
 [ "$WITH_NGINX" = "1" ] && setup_nginx
 [ "$WITH_CLOUDFLARED" = "1" ] && setup_cloudflared
 [ "$WITH_REDIS_INSIGHT" = "1" ] && setup_redis_ui
 
 log "インストールが完了しました"
 rc-status -a 2>/dev/null | grep -E 'redis|ytdlp|nginx' || true
-_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')"
 echo "API:      http://${_ip:-<IPアドレス>}:$API_PORT/download"
 [ "$WITH_NGINX" = "1" ] && echo "HTTPS:    https://${_ip:-<IPアドレス>}/download"
+[ "$WITH_BROWSER" = "1" ] && echo "ログイン: http://${_ip:-<IPアドレス>}:$BROWSER_PORT (cookie が必要なサイトの再ログインに使う)"
 [ "$WITH_REDIS_INSIGHT" = "1" ] && echo "Redis UI: http://$REDIS_UI_HOST:5540"
 echo "設定:     $CONF_FILE (編集後は rc-service で再起動)"
 echo "ログ:     /var/log/ytdlp-*.log"

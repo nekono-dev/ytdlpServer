@@ -1,0 +1,107 @@
+# 責務: インストーラ（ブートストラップ install.sh）の検査と頒布。ブランチ・タグへのpush、および手動実行ごとに、そのコミットに固定した install.sh を生成する。
+#   - 検査: シェルの構文・shellcheck、{{PRECHECK_STEPS_SUMMARY}}
+#   - ブランチ: 生成した install.sh・install.sh.sha256 を、ワークフローのartifact（installer-<ブランチ名>）として保存しつつ、
+#              ブランチ名を元にしたタグ（例: dev-v1.3）でGitHub Pre-releaseへ添付する（pushのたびに削除→作り直す）
+#   - タグ（v*）: GitHub Releaseへ install.sh・install.sh.sha256 を添付する
+#       最新:   https://github.com/<owner>/<repo>/releases/latest/download/install.sh
+#       版固定: https://github.com/<owner>/<repo>/releases/download/<タグ>/install.sh
+#   - 手動実行（workflow_dispatch）: 対象ブランチ/タグを選んで再実行すると、上記と同じ処理を再度走らせる
+#     （ブランチの場合はPre-releaseの再作成としてそのまま使える）
+name: installer
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      artifact: ${{ steps.names.outputs.artifact }}
+      slug: ${{ steps.names.outputs.slug }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: シェルの検査（構文・shellcheck）
+        run: |
+          for f in install/*.sh; do sh -n "$f"; done
+          shellcheck -S warning install/*.sh
+
+      {{PRECHECK_STEPS}}
+
+      - name: インストーラ（ブートストラップ）を生成
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          REPO_URL: https://github.com/${{ github.repository }}.git
+        run: |
+          mkdir -p {{DIST_DIR}}
+          sh install/build-install.sh "$REF_NAME" "$COMMIT" "$REPO_URL" > {{DIST_DIR}}/install.sh
+          sh -n {{DIST_DIR}}/install.sh
+          (cd {{DIST_DIR}} && sha256sum install.sh > install.sh.sha256)
+          cat {{DIST_DIR}}/install.sh.sha256
+
+      - name: 名前の算出（ブランチ・タグ名の/を-にする）
+        id: names
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          slug=$(printf '%s' "$REF_NAME" | tr '/' '-')
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+          echo "artifact=installer-$slug" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.names.outputs.artifact }}
+          path: {{DIST_DIR}}/
+          if-no-files-found: error
+
+  release-tag:
+    # タグ（v*）へのpush・手動実行のときだけ、GitHub Releaseへ添付する。
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: {{DIST_DIR}}
+          merge-multiple: true
+
+      - name: GitHub Releaseへ添付
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes
+          gh release upload "$TAG" {{DIST_DIR}}/install.sh {{DIST_DIR}}/install.sh.sha256 --repo "$GITHUB_REPOSITORY" --clobber
+
+  release-branch:
+    # ブランチへのpush・手動実行のときだけ、ブランチ名を元にしたタグでPre-releaseへ添付する。
+    # pushのたびに既存のPre-release（本文・アセット・タグとも）を削除してから作り直す。
+    if: startsWith(github.ref, 'refs/heads/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: {{DIST_DIR}}
+          merge-multiple: true
+
+      - name: Pre-releaseを作り直す
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build.outputs.slug }}
+        run: |
+          gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes --prerelease
+          gh release upload "$TAG" {{DIST_DIR}}/install.sh {{DIST_DIR}}/install.sh.sha256 --repo "$GITHUB_REPOSITORY" --clobber

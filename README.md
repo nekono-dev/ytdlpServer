@@ -148,7 +148,7 @@ Alpine Linux 3.21 に Docker なしでインストールする。
 
 ### 1. 実行環境を用意する
 
-メモリは **1GB 以上**を割り当てる（pot-provider の `npm ci` と canvas のビルドに必要。128MB 程度ではほぼ完了しない）。ディスクは 4GB 以上を推奨する。Redis Insight をビルドする場合は、ビルド時のみ追加の要件がある（[Redis の Web UI](#redis-web-uiの設定)を参照）。
+メモリは **1GB 以上**を割り当てる（pot-provider の `npm ci` と canvas のビルドに必要。128MB 程度ではほぼ完了しない）。ディスクは 4GB 以上を推奨する。ログイン用ブラウザ（既定で有効）を使う場合は、メモリ 2GB 以上・ディスクの空き 1GB 以上を推奨する（[詳細](#ログイン用ブラウザの設定)）。Redis Insight をビルドする場合は、ビルド時のみ追加の要件がある（[Redis の Web UI](#redis-web-uiの設定)を参照）。
 
 **LXC の場合**、コンテナを作成してシェルに入る。
 
@@ -172,7 +172,7 @@ lxc config device set ytdlp video shift=true
 コンテナ内（ベアメタルは Alpine 上）で実行する。
 
 ```sh
-wget -O install-alpine.sh https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install-alpine.sh
+wget -O install.sh https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh
 ```
 
 ### 3. 設定してインストールする
@@ -180,12 +180,12 @@ wget -O install-alpine.sh https://github.com/nekono-dev/ytdlpServer/releases/lat
 環境変数に設定値を指定して実行する。指定した値は `/etc/conf.d/ytdlpserver` に保存される。
 
 ```sh
-WORKER_MAX=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
+WORKER_MAX=4 DOWNLOAD_DIR=/mnt/video sh install.sh
 ```
 
 初回は数分かかる。完了すると API の URL が表示される。
 
-設定値はすべて省略可。全項目は `sh install-alpine.sh --help` でも確認できる。
+設定値はすべて省略可。全項目は `sh install.sh --help` でも確認できる。
 
 | 環境変数              | 既定値             | 内容                                                                               |
 | --------------------- | ------------------ | ---------------------------------------------------------------------------------- |
@@ -205,8 +205,7 @@ WORKER_MAX=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
 | HEARTBEAT_INTERVAL    | `10`               | worker がリースを更新する間隔（秒）                                                |
 | STOP_GRACE            | `20`               | 停止指示から yt-dlp を強制終了するまでの猶予（秒）                                 |
 | INPROGRESS_STALE      | `21600`            | 所有者不明の in_progress ジョブを回収するまでの時間（秒）                          |
-| INSTALL_DIR           | `/opt/ytdlpserver` | ソースの配置先                                                                     |
-| REPO_URL / REPO_REF   | Release 埋め込み値 | 取得元リポジトリとブランチ・タグ                                                   |
+| INSTALL_DIR           | `/opt/ytdlpserver` | ソースの取得先（`install.sh` がここへ clone する）。venv 等もこの直下に展開される |
 | WITH_NGINX            | `0`                | `1` で HTTPS（nginx）を有効化。[詳細](#httpsnginx)                                 |
 | SSL_CN                | `localhost`        | 自己署名証明書の CN。[詳細](#httpsnginx)                                           |
 | WITH_CLOUDFLARED      | `0`                | `1` で Cloudflare Tunnel を有効化。[詳細](#cloudflare-tunnel)                      |
@@ -216,11 +215,17 @@ WORKER_MAX=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
 | REDIS_INSIGHT_VERSION | `3.8.0`            | ビルドする Redis Insight のタグ。[詳細](#redis-web-uiの設定)                       |
 | RI_BUILD_STORAGE      | `auto`             | Redis Insight のビルド先（`auto` / `tmpfs` / `disk`）。[詳細](#redis-web-uiの設定) |
 | REDIS_UI_HOST         | `0.0.0.0`          | Web UI の待ち受けアドレス                                                          |
+| WITH_BROWSER          | `1`                | `1` でログイン用ブラウザ（Chromium）を有効化。[詳細](#ログイン用ブラウザの設定)    |
+| BROWSER_PORT          | `8080`             | ログイン用ブラウザ画面のポート                                                     |
+| BROWSER_UI_URL        | サーバの IP から自動検出 | 401 応答の `login_url` に使う URL。[詳細](#ログイン用ブラウザの設定)          |
+| SESSION_TIMEOUT       | `900`              | ログインセッションの自動終了までの秒数                                             |
+| BROWSER_LANG          | `ja,en-US,en`      | ログイン用ブラウザの言語設定                                                       |
+| BROWSER_TZ            | `Asia/Tokyo`       | ログイン用ブラウザのタイムゾーン                                                   |
 
 例: HTTPS を追加し、Redis の Web UI は軽量な commander にする。
 
 ```sh
-WITH_NGINX=1 REDIS_UI=commander sh install-alpine.sh
+WITH_NGINX=1 REDIS_UI=commander sh install.sh
 ```
 
 #### HTTPS（nginx）の設定
@@ -233,7 +238,7 @@ API の URL は `https://<IPアドレス>/download` になる。
 
 `WITH_CLOUDFLARED=1 CLOUDFLARE_TOKEN=<トークン>` で Cloudflare Tunnel を有効にする。
 
-- Release から取得した `install-alpine.sh` でのみ使える。
+- インストール時に、GitHub Releases から cloudflared の最新版を取得し、GitHub API が返すダイジェスト（sha256）と照合してから導入する。
 
 #### Redis Web UIの設定
 
@@ -257,8 +262,19 @@ API の URL は `https://<IPアドレス>/download` になる。
 例: ディスクを使わず、メモリ上でビルドする。
 
 ```sh
-RI_BUILD_STORAGE=tmpfs sh install-alpine.sh
+RI_BUILD_STORAGE=tmpfs sh install.sh
 ```
+
+#### ログイン用ブラウザの設定
+
+`WITH_BROWSER=1`（既定で有効）で、ログインが必要なサイトの cookie を取得するためのブラウザ（Chromium）を導入する。詳しい使い方は[ログインが必要な動画を取得する](#ログインが必要な動画を取得する)を参照。
+
+- 要件: メモリ 2GB 以上・ディスクの空き 1GB 以上を推奨（導入自体は約 0.8GB、ログイン中の Chromium はピークで 1.5GB 程度のメモリを使う）。
+  満たさない場合は、`WITH_BROWSER=1` を明示していなければ自動で無効化（警告を出したうえで継続）し、明示している場合は警告のみ出して続行する。
+- アクセス先は `http://<IPアドレス>:8080`。`BROWSER_PORT` でポートを変更できる。
+- `BROWSER_UI_URL`（401 応答の `login_url` に使う URL）は、サーバの外向き IP から自動で組み立てられる。手動で指定する場合や、nginx・Cloudflare Tunnel 経由で公開する場合は明示する。
+- 画面（8080）に認証は無い。LAN 内だけで使い、ポートを外部へ公開しない。Cloudflare Tunnel の対象にも含めない。
+- 不要な場合は `WITH_BROWSER=0` で無効化する。
 
 ### 4. 動作確認する
 
@@ -273,11 +289,11 @@ wget -S -O /dev/null http://127.0.0.1:5000/download
 
 ```sh
 ## 設定を変更する（変更する項目だけ指定する。指定しない項目は前回の値のまま）
-WORKER_MAX=8 sh install-alpine.sh
+WORKER_MAX=8 sh install.sh
 
 ## 設定値の更新は /etc/conf.d/ytdlpserver の編集 + スクリプトの再実行でも対応可能
 vi /etc/conf.d/ytdlpserver
-sh install-alpine.sh
+sh install.sh
 
 ## 状態を見る
 rc-status
@@ -290,13 +306,42 @@ rc-service ytdlp-api restart
 rc-service ytdlp-dispatcher restart
 ```
 
-サービス名: `ytdlp-pot` / `ytdlp-api` / `ytdlp-dispatcher`（worker はここから起動される） / `redis` / `nginx` / `ytdlp-cloudflared` / `ytdlp-redis-ui`
+サービス名: `ytdlp-pot` / `ytdlp-api` / `ytdlp-dispatcher`（worker はここから起動される） / `redis` / `nginx` / `ytdlp-cloudflared` / `ytdlp-redis-ui` / `ytdlp-browser`
 
 追加した機能を止める場合は、サービスを停止して無効にする。
 
 ```sh
 rc-service nginx stop
 rc-update del nginx
+```
+
+### アップデート
+
+最新のインストーラを取得して再実行するだけでよい。設定・cookie（ログインセッション）・Redis のデータは維持される。
+
+```sh
+wget -O install.sh https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh
+sh install.sh
+```
+
+- `install.sh` はビルド時のコミットに固定されている（ブランチ・タグの付け替えとは食い違わない）ため、常に取得し直してから実行する。
+- `REDIS_INSIGHT_VERSION` など、リリースに追従させる項目は、環境変数で明示しない限り新しいインストーラの既定値へ自動で切り替わる（保存済みの値に固定され続けることはない）。
+- 使われなくなった設定（旧バージョンの名残）は、実行時に警告を出したうえで自動的に削除される。
+- 大きくバージョンをまたぐ場合や、通常のアップデートでうまくいかない場合は、下記の[アンインストール](#アンインストール)を挟んでから新しいインストーラを実行する。
+
+### アンインストール
+
+`--uninstall` は、アプリ本体（venv・pot-provider・yt-dlp・Redis Insight・OpenRC サービス）だけを削除する。ソース（取得先の `INSTALL_DIR`）・設定（`/etc/conf.d/ytdlpserver`）・cookie・Redis のデータ（ジョブキュー）・動画の保存先はそのまま残る。
+
+```sh
+sh install.sh --uninstall
+```
+
+続けて新しいインストーラを実行すれば、設定を引き継いで安全にバージョンアップできる。
+
+```sh
+wget -O install.sh https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh
+sh install.sh
 ```
 
 ---
@@ -353,7 +398,7 @@ iOS ショートカットなどを作成すると楽に操作できる。
 一部のサイトは、ユーザ名とパスワードでは yt-dlp からログインできない。
 このサーバは、ブラウザでログインしたときの **cookie** を、サイトごとの **プロファイル** として保存しておき、取得に使う。
 
-1. ブラウザでログインして、プロファイルを保存する（[下記](#ブラウザでログインして-cookie-を保存するdocker-compose)）。
+1. ブラウザでログインして、プロファイルを保存する（[下記](#ブラウザでログインして-cookie-を保存する)）。
 2. いつもどおり `/download` に URL を送る。URL のサイトに対応するプロファイルが保存されていれば、自動で使われる。
 
 | プリセット（最初から選べるサイト） | プロファイル名 | 対象のドメイン |
@@ -379,12 +424,14 @@ curl -H "Content-Type: application/json" -X POST "http://<IPアドレス>:5000/d
   cookie はパスワードと同じ扱いにし、他人に渡さず、Git にもコミットしない（`cookies/` は `.gitignore` 済み）。
 - ログインには、普段使いとは別のアカウントを使うことを勧める（サイトによっては、別環境での cookie の利用でアカウントが保護・制限されることがある）。
 
-### ブラウザでログインして cookie を保存する（Docker Compose）
+### ブラウザでログインして cookie を保存する
 
 ブラウザでログインするだけで、cookie がプロファイルとして保存される。cookies.txt を書き出す必要はない。
 スマートフォンでも PC でも使える。サーバ上のブラウザの画面が、この端末の画面の大きさで表示される。
 
-1. （推奨）`.env` に `BROWSER_UI_URL=http://<サーバのIPアドレス>:8080` を書いて、起動し直す。
+Alpine インストーラは既定でこの機能を導入し（[詳細](#ログイン用ブラウザの設定)）、`BROWSER_UI_URL` もサーバの IP から自動で設定される。Docker Compose の場合は、下記の手順が必要。
+
+1. （推奨・Docker Compose のみ）`.env` に `BROWSER_UI_URL=http://<サーバのIPアドレス>:8080` を書いて、起動し直す。
    401 の `login_url` から、この画面を開けるようになる。
 2. ブラウザで `http://<サーバのIPアドレス>:8080/` を開く（`login_url` を開くと、該当するプロファイルが選ばれた状態で開く）。
 3. プロファイル（サイト）をプルダウンから選び、「ログイン用ブラウザを開く」を押す。
@@ -497,5 +544,5 @@ rc-service ytdlp-pot restart
 ### インストーラが途中で失敗する（Alpine）
 
 - `github.com` に接続できるか確認する。
-- もう一度 `sh install-alpine.sh` を実行する（途中からやり直せる）。
+- もう一度 `sh install.sh` を実行する（途中からやり直せる）。
 - サービスが起動しない場合は `/var/log/ytdlp-<サービス名>.log` を確認する。

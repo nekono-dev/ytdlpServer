@@ -59,8 +59,10 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 | `*/yt-dlp.conf`                                                            | イメージ内の `/etc/yt-dlp.conf` になる yt-dlp 共通設定            |
 | [nginx/](nginx/)                                                           | HTTPS 構成用の nginx イメージ                                     |
 | [docker-compose.yml](docker-compose.yml)                                   | 基本構成（HTTP）。`.nginx.yml` / `.cloudflare.yml` は派生構成     |
-| [scripts/install-alpine.sh](scripts/install-alpine.sh)                     | Docker 無しの Alpine 向けインストーラ                             |
-| [.github/workflows/release-installer.yml](.github/workflows/release-installer.yml) | インストーラの配布用 CI                                   |
+| [install/install.sh.tmpl](install/install.sh.tmpl)                         | 頒布される `install.sh` のひな形（git 等の導入・ソース取得のみを行う薄い層） |
+| [install/build-install.sh](install/build-install.sh)                       | ひな形へ REF・COMMIT・REPO_URL を埋め込み `install.sh` を生成する |
+| [install/setup.sh](install/setup.sh)                                       | 本体インストーラ（Docker 無しの Alpine 向け）                     |
+| [.github/workflows/installer.yml](.github/workflows/installer.yml)         | インストーラの配布用 CI                                           |
 | [MEMO.md](MEMO.md)                                                         | yt-dlp のオプションに関するメモ                                   |
 
 ## 開発環境の準備
@@ -93,7 +95,7 @@ docker run --rm -d --name redisinsight -p 5540:5540 redis/redisinsight:latest
 起動後、`http://localhost:5540` で Redis（`host.docker.internal` またはホストの IP、ポート 6379）を登録する。
 キーは `ytdlp:queue`（ジョブキュー）と `ytdlp:jobs:<status>:<job_id>`（ジョブ状態）を見る。
 
-Alpine 向けインストーラー（`scripts/install-alpine.sh`）は、コンテナを使わずに Redis Insight を動かす。
+Alpine 向けインストーラー（`install/setup.sh`）は、コンテナを使わずに Redis Insight を動かす。
 Redis Insight は SSPL のためビルド済みバイナリを再配布せず、公式 GitHub のタグのソースをインストール先でビルドする。
 手順は公式 Dockerfile と同じ（3.8.0 は yarn、それ以降の版は npm に移行済みのため `yarn.lock` の有無で分岐する）。
 詳細は [Alpine インストーラ](#alpine-インストーラ) を参照。
@@ -367,16 +369,33 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 
 ## Alpine インストーラ
 
-[scripts/install-alpine.sh](scripts/install-alpine.sh) は Docker を使わず、Alpine Linux へ全構成を導入する冪等なスクリプト。
+[install/](install/) は、Docker を使わず Alpine Linux へ全構成を導入する冪等なインストーラ一式。2層構成で、役割分担は変えない（[.claude/bootstrap-ci-builder/SKILL.md](.claude/bootstrap-ci-builder/SKILL.md) 参照）。
+
+| ファイル | 役割 |
+| --- | --- |
+| `install/install.sh.tmpl` | 頒布される `install.sh` のひな形。git・ca-certificates の導入と、埋め込まれたコミット（`@@COMMIT@@`）のソース取得だけを行う薄い層。取得後、同じコミットの `install/setup.sh` へ引数をそのまま渡して実行する |
+| `install/build-install.sh` | `install.sh.tmpl` へ REF・COMMIT・REPO_URL を埋め込み、標準出力へ `install.sh` を出す生成スクリプト |
+| `install/setup.sh` | 実際の導入・アンインストール処理を行う本体インストーラ |
+
+利用者は Release から `install.sh` を取得して実行するだけでよく、`install/setup.sh` を直接意識する必要はない（[README.md](README.md) 参照）。
 
 - 設定は環境変数で上書きでき、`/etc/conf.d/ytdlpserver` に保存される。再実行時は保存済みの値を引き継ぐ（優先順位: 環境変数 > 保存済み > 既定値）。
-- 環境変数の一覧は `sh scripts/install-alpine.sh --help` で確認できる。
-- ソースは `INSTALL_DIR`（既定 `/opt/ytdlpserver`）へ取得し、Python は venv（`--system-site-packages`）に入れる。
+- 環境変数の一覧は `sh install/setup.sh --help` で確認できる。
+- `--uninstall` でアプリ本体だけを削除できる（設定・cookie・Redis のデータ・動画の保存先は残す）。旧バージョンの安全なアンインストール + 新バージョンの導入に使う。
+- ソースは `INSTALL_DIR`（既定 `/opt/ytdlpserver`）そのもの。`install.sh` がここへ git clone し、直下の `install/setup.sh` を実行する。
+  venv・bin・pot-provider・redisinsight・ytdlp・cookies は、その兄弟ディレクトリとして展開する（いずれも `.gitignore` 済み）。Python は venv（`--system-site-packages`）に入れる。
 - yt-dlp は `YTDLP_DIR`（既定 `$INSTALL_DIR/ytdlp`）へ GitHub Releases から導入し、`current` を Redis と同様に更新する。
   bgutil プラグインは `/etc/yt-dlp/plugins/bgutil` に配置する。
 - Redis / pot-provider / API / dispatcher は OpenRC サービスとして登録する。pot-provider と Redis は `127.0.0.1` に限定する。
   worker は dispatcher の子プロセスとして起動される（OpenRC サービスとしては登録しない）。
 - 任意で nginx（HTTPS）、cloudflared、Redis の Web UI を導入する。
+- ログイン用ブラウザ（Chromium、`ytdlp-browser`）は `WITH_BROWSER=1` で既定で導入する。Alpine には musl 向けの `chromium` apk がそのまま使えるため、Redis Insight と違いその場でのビルドは不要。
+  導入時にメモリ・ディスクの空きを確認し、閾値（メモリ 2048MB / ディスク空き 1024MB）未満なら、`WITH_BROWSER=1` が明示されていない限り自動で無効化する（Redis Insight のビルド失敗時に `redis-commander` へフォールバックするのと同じ考え方）。
+
+### cloudflared の版数・整合性検証
+
+`WITH_CLOUDFLARED=1` を指定すると、`install/setup.sh` の `setup_cloudflared()` が**実行時**に GitHub Releases から cloudflared の最新版を取得し、GitHub API がアセットごとに返すダイジェスト（`digest: sha256:...`）と突き合わせて検証する。
+CI（`installer.yml`）側での版数・SHA256 の事前埋め込みは行わない（`install/setup.sh` は git checkout されたソースそのままで、`build-install.sh` のような CI による値の埋め込み対象にはできないため）。ダイジェストを取得できない場合は警告のうえ検証をスキップする。
 
 ### Redis Insight のビルド
 
@@ -395,24 +414,45 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 
 ### 動作確認
 
-`sh -n` と `shellcheck -s sh` を通すこと（CI でも実施）。
+`sh -n` と `shellcheck -S warning` を通すこと（CI でも実施）。
 
 ```sh
-sh -n scripts/install-alpine.sh
-shellcheck -s sh scripts/install-alpine.sh
+for f in install/*.sh; do sh -n "$f"; done
+shellcheck -S warning install/*.sh
 ```
+
+`install.sh` の生成（`install.sh.tmpl` への埋め込み）は手元でも試せる。
+
+```sh
+sh install/build-install.sh <REF> <40桁のコミットハッシュ> <REPO_URL> > /tmp/install.sh
+sh -n /tmp/install.sh
+```
+
+### 設定スキーマ版（アップデート対応）
+
+`REDIS_INSIGHT_VERSION` のように「リリースに追従させたい既定値」から解決した値は、一度 `/etc/conf.d/ytdlpserver` に保存されると、以降は保存済みの値が再読込されるだけになり、新しいインストーラの既定値に切り替わらない（放っておくと、新しいインストーラを実行してもアップデートされない）。
+
+これを解決するため、スクリプト先頭の `SCRIPT_SCHEMA_VERSION` を、保存済みの `_SCHEMA_VERSION`（`CONF_FILE` 内、ユーザー設定ではない内部項目）と比較し、上がっていれば「アップデート」とみなして、明示的に環境変数で指定されていない限りその追従項目（`REDIS_INSIGHT_VERSION`）を保存済みの値ごと破棄し、新しい既定値を使わせる。
+
+**次のいずれかを行った場合は `SCRIPT_SCHEMA_VERSION` を 1 上げること。**
+
+- 追従させたい既定値の意味を変えた（例: `REDIS_INSIGHT_VERSION` の既定値を上げた）
+- 追従対象の環境変数を増減した（上記の for ループの対象を変えた）
+- `_ENV_KEYS` から項目を削除した（削除自体は毎回の `write_conf` の書き直しで自動的に行われるが、上げておくとアップデート扱いのログが出て利用者に伝わる）
+
+`_ENV_KEYS` に無い項目が保存済みファイルに残っていた場合は、版数によらず毎回検出して警告し、次の `write_conf` で自動的に削除される。
 
 ## CI
 
-[.github/workflows/release-installer.yml](.github/workflows/release-installer.yml) が、`scripts/install-alpine.sh` などの変更で動く。
+[.github/workflows/installer.yml](.github/workflows/installer.yml) が、ブランチ・タグへの push ごとに動く（`install/setup.sh` は git checkout されたソースそのままなので、REPO_REF のように特定ファイルの変更だけをトリガーにはしない）。
 
-1. `sh -n` と `shellcheck` で構文チェックする。
-2. `REPO_REF_DEFAULT`（ブランチ / タグ名）と、cloudflared の最新版・SHA256 を、スクリプトの `*_DEFAULT=` 行へ埋め込む。
+1. `sh -n` と `shellcheck -S warning` で `install/*.sh` を構文チェックする。
+2. `install/build-install.sh` に、そのコミットの REF（ブランチ / タグ名）・COMMIT（フルSHA）・REPO_URL を渡して `install.sh` を生成する（`install.sh.tmpl` の `@@REF@@` / `@@COMMIT@@` / `@@REPO_URL@@` を置換）。
 3. 公開する。
-   - タグ（`v*`）: 通常の Release に `install-alpine.sh` を添付する。
-   - ブランチ: ブランチ名（`/` は `-`）の prerelease に添付し、自動更新する。
+   - タグ（`v*`）: 通常の Release に `install.sh`・`install.sh.sha256` を添付する。
+   - ブランチ: ワークフローの artifact（`installer-<ブランチ名（/ は - に置換）>`）として保存する（Release は作らない）。
 
-スクリプトの `REPO_REF_DEFAULT=` などの行頭書式を変えると埋め込みが失敗するため、変更時は CI の `sed` / `grep` も合わせて確認する。
+`install.sh.tmpl` の `@@REF@@` / `@@COMMIT@@` / `@@REPO_URL@@` はひな形内では置換せず残す約束（`build-install.sh` が置換する対象のため）。この形式を変えると `build-install.sh` の置換・置換漏れ検査が壊れるため、変更時は両者を合わせて確認する。
 
 ## テスト
 

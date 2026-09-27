@@ -1,0 +1,53 @@
+#!/bin/sh
+# 責務: 頒布されるインストーラ（`install.sh`）のひな形。CIが`install/build-install.sh`で、REF・COMMIT・REPO_URLを埋め込んで作る。
+# 動作: git等を導入 → 埋め込まれたコミットのソースを取得先（既定{{DEFAULT_INSTALL_DIR}}）へ取得 → 取得したHEADがコミットと一致することを確認 →
+#       リポジトリ内の本体インストーラ（{{SETUP_ENTRY}}）へ、受け取った引数をそのまま渡して実行する。
+# 取得するのは、埋め込まれたコミット1つに固定される（ブランチ・タグの付け替えがあっても、このスクリプトと取得するソースは食い違わない）。
+#
+# 使い方（root権限で）: curl -fsSL <頒布URL>/install.sh | sudo sh -s -- [本体インストーラの引数...]
+#   引数は本体インストーラ（{{SETUP_ENTRY}} --help）へそのまま渡される。
+#   環境変数 {{DIR_ENV_VAR}} で取得先を変更できる（既定{{DEFAULT_INSTALL_DIR}}）。既に取得済みなら、同じ手順で更新する（未コミットの変更があれば中止）。
+
+set -eu
+
+REF='@@REF@@'
+COMMIT='@@COMMIT@@'
+REPO_URL='@@REPO_URL@@'
+DIR=${{{DIR_ENV_VAR}}:-{{DEFAULT_INSTALL_DIR}}}
+
+log() { printf '==> %s\n' "$*"; }
+die() { printf 'エラー: %s\n' "$*" 1>&2; exit 1; }
+
+# 雛形のまま（CIによる置換前）実行された場合は中止する。
+case "$COMMIT" in
+  @@*) die "この install.sh はひな形です。頒布された install.sh（build-install.sh で生成）を使ってください" ;;
+esac
+[ "$(id -u)" -eq 0 ] || die "root権限で実行してください（例: curl -fsSL <URL>/install.sh | sudo sh -s -- [引数]）"
+
+log "$REF（$COMMIT）"
+
+# {{OS_PACKAGE_MANAGER_CHECK}}
+if ! command -v git >/dev/null 2>&1 || [ ! -d /etc/ssl/certs ]; then
+  {{BOOTSTRAP_DEPS_INSTALL}}
+fi
+
+if [ -d "$DIR/.git" ]; then
+  # 追跡ファイルの変更が残っていると更新で失われるため中止する（.envなど追跡外のファイルは対象外）。
+  if [ -n "$(git -C "$DIR" status --porcelain --untracked-files=no)" ]; then
+    die "$DIR に未コミットの変更があります。退避してから再実行してください"
+  fi
+else
+  mkdir -p "$DIR"
+  [ -z "$(ls -A "$DIR")" ] || die "$DIR は空ではなく、gitリポジトリでもありません。{{DIR_ENV_VAR}} で別の場所を指定してください"
+  git -C "$DIR" -c init.defaultBranch=main init -q
+  git -C "$DIR" remote add origin "$REPO_URL"
+fi
+git -C "$DIR" remote set-url origin "$REPO_URL"
+
+log "ソースを取得: $REPO_URL → $DIR"
+git -C "$DIR" fetch -q --depth 1 origin "$COMMIT"
+git -C "$DIR" checkout -q --detach FETCH_HEAD
+# 取得したソースが、埋め込まれたコミットと一致することを確認する（食い違いがあれば実行しない）。
+[ "$(git -C "$DIR" rev-parse HEAD)" = "$COMMIT" ] || die "取得したソースが期待するコミットと一致しません（$COMMIT）"
+
+exec sh "$DIR/{{SETUP_ENTRY}}" "$@"
