@@ -7,6 +7,7 @@
 # 使い方（root権限で）: curl -fsSL <頒布URL>/install.sh | sudo sh -s -- [本体インストーラの引数...]
 #   引数は本体インストーラ（{{SETUP_ENTRY}} --help）へそのまま渡される。
 #   環境変数 {{DIR_ENV_VAR}} で取得先を変更できる（既定{{DEFAULT_INSTALL_DIR}}）。既に取得済みなら、同じ手順で更新する（未コミットの変更があれば中止）。
+#   引数に --uninstall を含めると、本体インストーラの --uninstall を実行した後、取得先ディレクトリごと削除する（真のアンインストール）。
 
 set -eu
 
@@ -24,7 +25,20 @@ case "$COMMIT" in
 esac
 [ "$(id -u)" -eq 0 ] || die "root権限で実行してください（例: curl -fsSL <URL>/install.sh | sudo sh -s -- [引数]）"
 
+UNINSTALL=
+for arg in "$@"; do
+  [ "$arg" = "--uninstall" ] && UNINSTALL=1
+done
+
 log "$REF（$COMMIT）"
+
+# アンインストール時は、既に本体インストーラが取得済みのDIRを対象にするため、依存導入・新規取得は行わない。
+if [ -n "$UNINSTALL" ]; then
+  [ -f "$DIR/{{SETUP_ENTRY}}" ] && sh "$DIR/{{SETUP_ENTRY}}" "$@"
+  log "取得先を削除: $DIR"
+  rm -rf "$DIR"
+  exit 0
+fi
 
 # {{OS_PACKAGE_MANAGER_CHECK}}
 if ! command -v git >/dev/null 2>&1 || [ ! -d /etc/ssl/certs ]; then

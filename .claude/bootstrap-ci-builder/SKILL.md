@@ -15,10 +15,15 @@ Linuxサーバ等のベアメタルへ「1行のcurl|shコマンド」で導入�
 |---|---|
 | `install/install.sh.tmpl` | 頒布される`install.sh`のひな形。`@@REF@@`・`@@COMMIT@@`・`@@REPO_URL@@`が未置換のプレースホルダとして残る。git等の導入・リポジトリの取得（clone/fetch）・取得先が本体インストーラ（`install/setup.sh`）へ引数をそのまま渡して実行するだけの薄い層。 |
 | `install/build-install.sh` | `install.sh.tmpl`へ`REF`・`COMMIT`・`REPO_URL`を埋め込み、標準出力へ`install.sh`を出す生成スクリプト。CIと手元の両方から同じ手順で使う。 |
-| `install/setup.sh` | 実際の導入・アンインストール処理を行う本体インストーラ。プロジェクト固有のものがある場合は、 `setup.sh` に置き換えること。 |
+| `install/setup.sh` | 実際の導入・アンインストール処理を行う本体インストーラ。プロジェクト固有のものがある場合は、 `setup.sh` に置き換えること。`--uninstall` フラグに対応させ、本体の導入物のアンインストール処理を行うこと（`install.sh` 側のDIR自己削除の対象外）。 |
 | `.github/workflows/installer.yml` | ブランチpushでは`install.sh`をCIアーティファクトとして保存しつつ、ブランチ名を元にしたタグ（`/`を`-`に置換。例`dev-v1.3`）でGitHub Pre-releaseへも添付する（pushのたびに既存Pre-releaseを削除して作り直す）。タグ（`v*`）pushではGitHub Releaseへ添付する。`workflow_dispatch`による手動実行にも対応し、ブランチを選んで再実行すればPre-releaseの再作成として使える。 |
 
 **重要**: 頒布される最終成果物のファイル名は常に`install.sh`で固定する（`bootstrap.sh`のような別名にしない）。ひな形ファイル自体の名前を`install.sh.tmpl`とし、本体インストーラは`setup.sh` に固定することで、「ひな形」「本体」「生成物」の3者が同名になる混同を避ける。
+
+## アンインストール
+
+`install.sh` は引数に `--uninstall` を含む場合、`{{SETUP_ENTRY}} --uninstall` を実行した後、取得先ディレクトリ（`DIR`）自体を削除する。
+`{{SETUP_ENTRY}}`（プロジェクト固有の本体インストーラ）は `--uninstall` フラグに対応させ、本体の導入物のアンインストールを行うこと。
 
 ## 着手前に確認する事項
 
