@@ -46,7 +46,8 @@ apiServer / workerServer には、環境変数 `BROWSER_UI_URL`（例 `http://<�
 | 表示 | ヘッドあり（Xvfb 1280x1000 を表示先にするだけで、VNC は使わない） |
 | UA | 操作画面がタッチ端末（`pointer: coarse`）なら、起動フラグ `--user-agent` で Android の Chrome を名乗る。PC なら変えない |
 | 画面サイズ | CDP `Emulation.setDeviceMetricsOverride` で、操作画面の表示領域（CSS px）と devicePixelRatio（最大 2）に合わせる。タッチ端末なら `mobile: true` と `Emulation.setTouchEmulationEnabled` |
-| フラグ | `--no-sandbox` `--disable-dev-shm-usage` `--disable-gpu` `--remote-debugging-port=9222` `--user-data-dir=/tmp/profile-*` `--no-first-run` `--no-default-browser-check` `--lang=ja` `--test-type`（`--no-sandbox` の警告バーを出さない） |
+| WebGL | `--use-gl=angle --use-angle=gl --ignore-gpu-blocklist` と、Xvfb の `+extension GLX +render`。Mesa の llvmpipe で描画する（`--disable-gpu` にしない） |
+| フラグ | `--no-sandbox` `--disable-dev-shm-usage` `--remote-debugging-port=9222` `--user-data-dir=/tmp/profile-*` `--no-first-run` `--no-default-browser-check` `--lang=ja` `--test-type`（`--no-sandbox` の警告バーを出さない） |
 
 **Turnstile のための制約（検証で確認）:**
 
@@ -57,6 +58,18 @@ apiServer / workerServer には、環境変数 `BROWSER_UI_URL`（例 `http://<�
 | ヘッドあり + 起動フラグ `--user-agent` | 成功する |
 
 このため、ヘッドレスにしない、UA は CDP で上書きしない。
+
+**ログインの制限を避けるための制約（X のログイン制限の調査で確認）:**
+
+| 項目 | 内容 |
+|---|---|
+| タイムゾーン（**決定的**） | ブラウザのタイムゾーンを、サーバの外向き IP の所在地に合わせる。UTC のままだと、X が実在アカウントのログインを `We've temporarily limited your login` として制限する。環境変数 `TZ`（compose の既定は `Asia/Tokyo`）で指定し、UTC のままなら起動時に警告する |
+| 言語 | `--accept-lang`（環境変数 `BROWSER_LANG`、既定 `ja,en-US,en`）で `Accept-Language`・`navigator.languages` を IP の所在地に合わせる。X の制限には言語は必須でなかったが、タイムゾーンと合わせて設定する |
+| WebGL | `--disable-gpu` だと WebGL が使えず（`Canvas has no webgl context`）、実在のブラウザとして不自然になるため、Mesa の llvmpipe で描画する。X の制限には影響しなかった（WebGL なしでも、タイムゾーンを合わせれば通る）。ボット検査 bot.sannysoft.com は失敗ゼロ。SwiftShader はレンダラ名が検出されやすいため使わない |
+| 文字入力 | 印字できる ASCII（64 文字以内）は、`keyDown`（`text` 付き）と `keyUp` を 1 文字ずつ送る。ページに `keydown`・`keypress`・`input`・`keyup` が届く。まとめて届いた文字の間は 15〜50ms あける。日本語入力の確定文字・絵文字・長い貼り付けは `Input.insertText`。X の制限には影響しなかった |
+| ウィンドウの大きさ | 実ウィンドウ（外寸）と表示領域（内寸）が大きくずれるが、X の制限には影響しなかった（実ウィンドウに揃えても結果は同じ） |
+| IP | VPN の出口 IP（データセンター）でも、素の回線の IP でも、タイムゾーンを合わせれば通った |
+| UA と Client Hints | スマートフォン表示の UA は Android の Chrome を名乗るが、`navigator.userAgentData`（`mobile: false`、`platform: Linux`）と `navigator.platform` が食い違う。PC 表示（UA を変えない）では影響を確認していない。スマートフォン表示の X への影響は未確認 |
 
 ### 画面配信と入力（Phase 3）
 
@@ -168,6 +181,7 @@ stateDiagram-v2
 | セッション cookie | expires=0 で保存する。yt-dlp が送るかは未検証 |
 | cookie の寿命 | サイトが決める。失効は API のログイン要求（401）で分かる |
 | ブラウザの環境 | サーバの IP と UA で操作される。別環境での cookie 利用を保護機構が検知する可能性がある |
+| X のログイン制限 | 実在アカウントのユーザ名を送ると `We've temporarily limited your login` になることがある（存在しないユーザ名では出ない）。原因は、ブラウザのタイムゾーンと IP の所在地の食い違い。`TZ` を合わせれば解消する（上記）。他のサイトでも、同様の食い違いが制限の原因になり得る |
 | ピンチ | 2 本指のタッチは送るが、ページ側がズームに対応するかはサイト次第 |
 
 ### 判断の記録

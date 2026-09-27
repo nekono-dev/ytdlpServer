@@ -40,6 +40,10 @@ services:
     build: ./browserServer
     environment:
       SESSION_TIMEOUT: ${SESSION_TIMEOUT:-900}
+      # ブラウザのタイムゾーン・言語は、サーバの外向き IP の所在地に合わせる
+      # (食い違うと、X などでログインが制限される)
+      TZ: ${TZ:-Asia/Tokyo}
+      BROWSER_LANG: ${BROWSER_LANG:-ja,en-US,en}
     volumes:
       - ./cookies:/cookies
     shm_size: 512m

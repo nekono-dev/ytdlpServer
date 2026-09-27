@@ -127,10 +127,33 @@ class InputTest(unittest.TestCase):
         self.assertEqual(enter[0][1]["text"], "\r")
         self.assertNotIn("text", enter[1][1])
         self.assertEqual(self.conv({"type": "key", "key": "F12"}), [])
+        # 日本語・絵文字・改行を含む文字は insertText。長い貼り付けも insertText
         self.assertEqual(self.conv({"type": "text", "text": "日本語"}),
                          [("Input.insertText", {"text": "日本語"})])
+        for t in ("a日", "a\nb", "😀", "x" * 65):
+            self.assertEqual(self.conv({"type": "text", "text": t})[0][0], "Input.insertText", t)
         self.assertEqual(self.conv({"type": "text", "text": ""}), [])
         self.assertEqual(self.conv({"type": "text", "text": 5}), [])
+
+    def test_ascii_text_uses_key_events(self) -> None:
+        calls = self.conv({"type": "text", "text": "Ab1_ @"})
+        types = [c[0] if c[0] == "pause" else c[1]["type"] for c in calls]
+        self.assertEqual(types, ["keyDown", "keyUp", "pause"] * 5 + ["keyDown", "keyUp"])
+        self.assertNotIn("Input.insertText", [c[0] for c in calls])
+        downs = [c[1] for c in calls if c[0] != "pause" and c[1]["type"] == "keyDown"]
+        self.assertEqual([d["text"] for d in downs], list("Ab1_ @"))
+        upper, lower, digit, underscore, space, at = downs
+        self.assertEqual((upper["code"], upper["modifiers"], upper["windowsVirtualKeyCode"]), ("KeyA", 8, 65))
+        self.assertEqual((lower["code"], lower["modifiers"]), ("KeyB", 0))
+        self.assertEqual((digit["code"], digit["windowsVirtualKeyCode"]), ("Digit1", 49))
+        self.assertEqual((underscore["code"], underscore["modifiers"]), ("Minus", 8))
+        self.assertEqual((space["code"], space["windowsVirtualKeyCode"]), ("Space", 32))
+        self.assertEqual(at["modifiers"], 8)
+        # keyUp には text を付けない
+        ups = [c[1] for c in calls if c[0] != "pause" and c[1]["type"] == "keyUp"]
+        self.assertTrue(all("text" not in u for u in ups))
+        # 1 文字なら pause は入らない
+        self.assertEqual([c[0] for c in self.conv({"type": "text", "text": "a"})], ["Input.dispatchKeyEvent"] * 2)
 
     def test_probe_and_nav_and_invalid(self) -> None:
         probe = self.conv({"type": "probe", "x": 10, "y": 20})
@@ -142,6 +165,47 @@ class InputTest(unittest.TestCase):
         self.assertEqual(self.conv({"type": "nav", "action": "reload"}), [("Page.reload", {})])
         for bad in ({"type": "touch", "phase": "x"}, {"type": "mouse", "phase": "down"}, {"type": "zzz"}, {}):
             self.assertEqual(self.conv(bad), [], bad)
+
+
+class LaunchTest(unittest.TestCase):
+    def setUp(self) -> None:
+        load_service("browserServer", tempfile.mkdtemp())
+        self.b = sys.modules["browser"]
+
+    def test_chromium_args(self) -> None:
+        args = self.b.chromium_args("/tmp/p", mobile=False, lang="ja,en-US,en")
+        self.assertIn("--accept-lang=ja,en-US,en", args)
+        self.assertIn("--user-data-dir=/tmp/p", args)
+        # ヘッドレスにしない・GPU を無効にしない(WebGL を使えるようにする)
+        for bad in ("--headless", "--headless=new", "--disable-gpu"):
+            self.assertNotIn(bad, args)
+        for flag in self.b.WEBGL_FLAGS:
+            self.assertIn(flag, args)
+        self.assertFalse([a for a in args if a.startswith("--user-agent")])
+        self.assertEqual((args[0], args[-1]), ("chromium", "about:blank"))
+
+    def test_mobile_ua_only_when_mobile(self) -> None:
+        args = self.b.chromium_args("/tmp/p", mobile=True)
+        ua = [a for a in args if a.startswith("--user-agent=")]
+        self.assertEqual(len(ua), 1)
+        self.assertIn("Mobile Safari", ua[0])
+        self.assertIn(f"--accept-lang={self.b.DEFAULT_LANG}", args)
+
+    def test_utc_warning(self) -> None:
+        import contextlib
+        import io
+        import os
+        from unittest import mock
+        for tz, warned in (("Asia/Tokyo", False), ("UTC", True), ("", True)):
+            out = io.StringIO()
+            with mock.patch.dict(os.environ, {"TZ": tz}), contextlib.redirect_stdout(out):
+                self.b.warn_if_utc()
+            self.assertEqual("WARNING" in out.getvalue(), warned, tz)
+        out = io.StringIO()
+        env = {k: v for k, v in os.environ.items() if k != "TZ"}
+        with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(out):
+            self.b.warn_if_utc()
+        self.assertIn("WARNING", out.getvalue(), "TZ 未設定は UTC 扱い")
 
 
 class SessionTest(unittest.IsolatedAsyncioTestCase):

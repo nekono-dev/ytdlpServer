@@ -10,6 +10,7 @@ import base64
 import contextlib
 import json
 import os
+import random
 import re
 import shutil
 import signal
@@ -23,6 +24,10 @@ import aiohttp
 DISPLAY = ":99"
 CDP_PORT = 9222
 START_TIMEOUT = 30
+# WebGL は Mesa の llvmpipe で描画する。GPU 無効(--disable-gpu)にすると WebGL が
+# 使えなくなる。SwiftShader ではなく llvmpipe にするのは、レンダラ名が GPU の無い
+# 実在の Linux 環境で見られるものと同じになるため
+WEBGL_FLAGS = ("--use-gl=angle", "--use-angle=gl", "--ignore-gpu-blocklist")
 X_SOCKET = Path("/tmp/.X11-unix/X99")  # noqa: S108
 X_LOCK = Path("/tmp/.X99-lock")  # noqa: S108
 CALL_TIMEOUT = 15
@@ -40,6 +45,16 @@ KEYS: dict[str, dict[str, Any]] = {
     "Home": {"code": "Home", "windowsVirtualKeyCode": 36},
     "End": {"code": "End", "windowsVirtualKeyCode": 35},
 }
+# キーイベントで送る文字(印字できる ASCII)。それ以外(日本語入力の確定文字や絵文字)は
+# insertText で送る。キーイベントの最大文字数(貼り付けなど長い入力は insertText)
+KEY_TEXT_MAX = 64
+SHIFT = 8
+SYMBOL_CODES = {
+    " ": ("Space", 32), "-": ("Minus", 189), "_": ("Minus", 189), "=": ("Equal", 187),
+    "+": ("Equal", 187), "@": ("Digit2", 50), ".": ("Period", 190), ",": ("Comma", 188),
+    "/": ("Slash", 191), ";": ("Semicolon", 186), "'": ("Quote", 222),
+}
+SHIFTED = frozenset('_+@~!#$%^&*()":<>?{|}')
 TOUCH_TYPES = {"start": "touchStart", "move": "touchMove",
                "end": "touchEnd", "cancel": "touchCancel"}
 MOUSE_TYPES = {"down": "mousePressed", "move": "mouseMoved", "up": "mouseReleased"}
@@ -62,6 +77,37 @@ EDITABLE_AT = """((x, y) => {
 })"""
 
 
+DEFAULT_LANG = "ja,en-US,en"
+
+
+def chromium_args(profile_dir: str, *, mobile: bool, lang: str = DEFAULT_LANG,
+                  ) -> list[str]:
+    """Chromium の起動コマンド。"""
+    args = [
+        "chromium", "--no-sandbox", "--disable-dev-shm-usage",
+        # GPU が無くても WebGL を使えるようにする(Mesa の llvmpipe)
+        *WEBGL_FLAGS,
+        f"--user-data-dir={profile_dir}",
+        f"--remote-debugging-port={CDP_PORT}",
+        "--no-first-run", "--no-default-browser-check",
+        # 画面の言語と、Accept-Language・navigator.languages。IP の所在地に合わせる
+        "--lang=ja", f"--accept-lang={lang}",
+        "--test-type", "--window-position=0,0", "--window-size=1280,1000",
+    ]
+    if mobile:
+        # UA は起動フラグで変える。CDP の Emulation.setUserAgentOverride は
+        # Web Worker 等へ一貫して反映されず、Turnstile が失敗する
+        args.append(f"--user-agent={mobile_ua(chromium_major())}")
+    return [*args, "about:blank"]
+
+
+def warn_if_utc() -> None:
+    """タイムゾーンが UTC のままだと、IP の所在地と食い違って X 等に制限される。"""
+    if os.environ.get("TZ", "UTC").upper() in ("UTC", "ETC/UTC", "GMT", ""):
+        print("WARNING: TZ is UTC. Set TZ to the timezone of the server's IP "
+              "location (e.g. Asia/Tokyo), or some sites (X) limit the login.")
+
+
 def _remove_x_locks() -> None:
     X_LOCK.unlink(missing_ok=True)
     X_SOCKET.unlink(missing_ok=True)
@@ -80,6 +126,31 @@ def chromium_major() -> str:
 def mobile_ua(version: str) -> str:
     return ("Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "
             f"(KHTML, like Gecko) Chrome/{version}.0.0.0 Mobile Safari/537.36")
+
+
+def char_key_events(ch: str) -> list[tuple[str, dict[str, Any]]]:
+    """印字できる ASCII 1 文字を、実際のキー入力と同じ keyDown / keyUp の組にする。
+
+    insertText だけでは、ページ側にキーの押下・離上のイベントが届かない。
+    実際のキー入力に近づけて、フォームの入力検査に不自然に見えないようにする。
+    """
+    modifiers = SHIFT if ch.isupper() or ch in SHIFTED else 0
+    if ch.isalpha():
+        code, vk = f"Key{ch.upper()}", ord(ch.upper())
+    elif ch.isdigit():
+        code, vk = f"Digit{ch}", ord(ch)
+    else:
+        code, vk = SYMBOL_CODES.get(ch, ("", 0))
+    base: dict[str, Any] = {"key": ch, "code": code, "modifiers": modifiers}
+    if vk:
+        base["windowsVirtualKeyCode"] = vk
+    return [("Input.dispatchKeyEvent", {**base, "type": "keyDown", "text": ch}),
+            ("Input.dispatchKeyEvent", {**base, "type": "keyUp"})]
+
+
+def is_key_text(text: str) -> bool:
+    return 0 < len(text) <= KEY_TEXT_MAX and all(
+        " " <= c <= "~" for c in text)
 
 
 def _clamp(value: object, lo: float, hi: float, default: float) -> float:
@@ -115,24 +186,17 @@ class ChromiumBrowser:
         # 強制終了で残った Xvfb のロックを除く
         await asyncio.to_thread(_remove_x_locks)
         # ヘッドレスは Turnstile に弾かれるため、Xvfb を表示先にしてヘッドありで動かす
+        # GLX を有効にする(WebGL を Mesa のソフトウェア描画で動かすため)
         self._spawn(["Xvfb", DISPLAY, "-screen", "0", "1280x1000x24",
-                     "-nolisten", "tcp"])
+                     "+extension", "GLX", "+render", "-nolisten", "tcp"])
         for _ in range(START_TIMEOUT * 10):
             if await asyncio.to_thread(X_SOCKET.exists):
                 break
             await asyncio.sleep(0.1)
-        flags = []
-        if self.mobile:
-            # UA は起動フラグで変える。CDP の Emulation.setUserAgentOverride は
-            # Web Worker 等へ一貫して反映されず、Turnstile が失敗する
-            flags.append(f"--user-agent={mobile_ua(chromium_major())}")
-        self._spawn([
-            "chromium", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
-            f"--user-data-dir={self.profile_dir}",
-            f"--remote-debugging-port={CDP_PORT}",
-            "--no-first-run", "--no-default-browser-check", "--lang=ja",
-            "--test-type", "--window-position=0,0", "--window-size=1280,1000",
-            *flags, "about:blank"])
+        warn_if_utc()
+        self._spawn(chromium_args(
+            self.profile_dir, mobile=self.mobile, lang=os.environ.get(
+                "BROWSER_LANG", DEFAULT_LANG)))
 
         self.http = aiohttp.ClientSession()
         info = None
@@ -370,7 +434,10 @@ class ChromiumBrowser:
         if not sid:
             return
         for params in input_to_cdp(m):
-            if params[0] == "probe":
+            if params[0] == "pause":
+                # 貼り付けなど、まとめて届いた文字の間隔を、人の入力に近づける
+                await asyncio.sleep(random.uniform(0.015, 0.05))  # noqa: S311
+            elif params[0] == "probe":
                 r = await self.send("Runtime.evaluate", {
                     "expression": params[1], "returnByValue": True}, sid)
                 await client.send_str(json.dumps({
@@ -415,7 +482,12 @@ def input_to_cdp(m: dict) -> list[tuple[str, Any]]:
             calls.append(("probe", expr))
         elif kind == "text":
             text = m.get("text")
-            if isinstance(text, str) and text:
+            if isinstance(text, str) and is_key_text(text):
+                for i, ch in enumerate(text):
+                    if i:
+                        calls.append(("pause", None))
+                    calls.extend(char_key_events(ch))
+            elif isinstance(text, str) and text:
                 calls.append(("Input.insertText", {"text": text[:10000]}))
         elif kind == "key" and m.get("key") in KEYS:
             key = {"key": m["key"], **KEYS[m["key"]]}

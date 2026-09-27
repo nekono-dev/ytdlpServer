@@ -434,6 +434,26 @@ cookie が未指定・未登録・失効しているときは、リクエスト�
 
 プロファイルの cookie が未保存または失効している。[ログインが必要な場合の応答](#ログインが必要な場合の応答)の `login_url` を開き、ログインして保存し直す。
 
+### X のログインで `We've temporarily limited your login. Please try again later.` と表示され、パスワード欄が出ない
+
+X 側が、このサーバのブラウザからのログインを制限している。ログイン画面で、実在するユーザ名を送ったときだけ出る（存在しないユーザ名では出ない）。
+
+原因は、**ブラウザのタイムゾーンが、サーバの外向き IP の所在地と食い違っていること**（UTC のまま、IP は日本、など）。次のように `TZ` を IP の所在地に合わせて、`browser` を作り直す。
+
+```sh
+# .env（compose ファイルと同じ場所）
+TZ=Asia/Tokyo
+BROWSER_LANG=ja,en-US,en
+```
+
+```sh
+docker compose up -d --build browser
+```
+
+- 既定は `Asia/Tokyo`（日本語）。海外のサーバや VPN 経由で出ている場合は、その所在地のタイムゾーン（例: `America/New_York`）と言語（例: `en-US,en`）にする。
+- `TZ` が UTC のままだと、`browser` のログに `WARNING: TZ is UTC` が出る。
+- 制限された直後は、設定を直しても、しばらく同じ表示になることがある。試行を繰り返さず、時間をあけて試す。
+
 ### `yt-dlp probe failed; wait restart yt-dlp.` が返る
 
 しばらく待って、もう一度リクエストする。繰り返す場合は URL と `options` を確認する。

@@ -172,6 +172,8 @@ docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download 
 | PORT            | `8080`      | 操作画面・制御 API のポート                           |
 | SESSION_TIMEOUT | `900`       | ログイン操作の自動終了までの秒数                      |
 | COOKIE_DIR      | `/cookies`  | cookie プロファイルの置き場所                         |
+| TZ              | 未設定（compose では `Asia/Tokyo`） | ブラウザのタイムゾーン。サーバの外向き IP の所在地に合わせる（UTC のままだと X のログインが制限される） |
+| BROWSER_LANG    | `ja,en-US,en` | ブラウザの言語（`Accept-Language`・`navigator.languages`） |
 
 ### Worker
 
