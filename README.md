@@ -146,7 +146,9 @@ docker-compose -f <ファイル> down
 
 Alpine Linux 3.21 に Docker なしでインストールする。
 
-### 1. 実行環境を用意する
+### インストール
+
+#### 1. 実行環境を用意する
 
 メモリは **1GB 以上**を割り当てる（pot-provider の `npm ci` と canvas のビルドに必要。128MB 程度ではほぼ完了しない）。ディスクは 4GB 以上を推奨する。ログイン用ブラウザ（既定で有効）を使う場合は、メモリ 2GB 以上・ディスクの空き 1GB 以上を推奨する（[詳細](#ログイン用ブラウザの設定)）。Redis Insight をビルドする場合は、ビルド時のみ追加の要件がある（[Redis の Web UI](#redis-web-uiの設定)を参照）。
 
@@ -167,7 +169,7 @@ lxc config device set ytdlp video shift=true
 
 **ベアメタルの場合**、Alpine に root でログインする。
 
-### 2. インストーラを取得する
+#### 2. インストーラを取得する
 
 コンテナ内（ベアメタルは Alpine 上）で実行する。
 
@@ -175,7 +177,7 @@ lxc config device set ytdlp video shift=true
 wget -O install.sh https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh
 ```
 
-### 3. 設定してインストールする
+#### 3. 設定してインストールする
 
 環境変数に設定値を指定して実行する。指定した値は `/etc/conf.d/ytdlpserver` に保存される。
 
@@ -187,40 +189,41 @@ WORKER_MAX=4 DOWNLOAD_DIR=/mnt/video sh install.sh
 
 設定値はすべて省略可。全項目は `sh install.sh --help` でも確認できる。
 
-| 環境変数              | 既定値             | 内容                                                                               |
-| --------------------- | ------------------ | ---------------------------------------------------------------------------------- |
-| DOWNLOAD_DIR          | `/mnt`             | 動画の保存先                                                                       |
-| WORKER_MAX            | `1`                | 同時に動く worker の最大数（旧 `WORKER_COUNT` を別名として引き継ぐ）               |
-| API_PORT              | `5000`             | API のポート                                                                       |
-| POT_PORT              | `4416`             | PO Token プロバイダのポート（127.0.0.1 限定）                                      |
-| REDIS_TTL             | `604800`           | redis のジョブ情報の保持期間（秒）                                                 |
-| RETRY_COUNT           | `5`                | ダウンロードのリトライ回数                                                         |
-| YTDLP_REPO            | `yt-dlp/yt-dlp`    | yt-dlp の取得元（GitHub リポジトリ）                                               |
-| UPDATE_INTERVAL       | `21600`            | yt-dlp の新版の確認間隔（秒）                                                      |
-| UPDATE_RETRY_INTERVAL | `1800`             | 確認・適用に失敗した後の再確認の間隔（秒）                                         |
-| UPDATE_COOLDOWN       | `1800`             | probe 失敗による確認依頼の最短間隔（秒）                                           |
-| KEEP_VERSIONS         | `2`                | 導入先に残す yt-dlp の版数                                                         |
-| DISPATCH_SCAN_INTERVAL| `30`               | dispatcher がジョブを定期確認する間隔（秒）                                        |
-| LEASE_TTL             | `60`               | worker の生存確認（リース）の有効期間（秒）                                        |
-| HEARTBEAT_INTERVAL    | `10`               | worker がリースを更新する間隔（秒）                                                |
-| STOP_GRACE            | `20`               | 停止指示から yt-dlp を強制終了するまでの猶予（秒）                                 |
-| INPROGRESS_STALE      | `21600`            | 所有者不明の in_progress ジョブを回収するまでの時間（秒）                          |
-| INSTALL_DIR           | `/opt/ytdlpserver` | ソースの取得先（`install.sh` がここへ clone する）。venv 等もこの直下に展開される |
-| WITH_NGINX            | `0`                | `1` で HTTPS（nginx）を有効化。[詳細](#httpsnginx)                                 |
-| SSL_CN                | `localhost`        | 自己署名証明書の CN。[詳細](#httpsnginx)                                           |
-| WITH_CLOUDFLARED      | `0`                | `1` で Cloudflare Tunnel を有効化。[詳細](#cloudflare-tunnel)                      |
-| CLOUDFLARE_TOKEN      | なし               | Cloudflare Tunnel のトークン（`WITH_CLOUDFLARED=1` で必須）                        |
-| WITH_REDIS_INSIGHT    | `1`                | `1` で Redis◊ の Web UI（5540）を有効化。[詳細](#redis-web-uiの設定)               |
-| REDIS_UI              | `insight`          | Web UI の種類（`insight` / `commander`）。[詳細](#redis-web-uiの設定)              |
-| REDIS_INSIGHT_VERSION | `3.8.0`            | ビルドする Redis Insight のタグ。[詳細](#redis-web-uiの設定)                       |
-| RI_BUILD_STORAGE      | `auto`             | Redis Insight のビルド先（`auto` / `tmpfs` / `disk`）。[詳細](#redis-web-uiの設定) |
-| REDIS_UI_HOST         | `0.0.0.0`          | Web UI の待ち受けアドレス                                                          |
-| WITH_BROWSER          | `1`                | `1` でログイン用ブラウザ（Chromium）を有効化。[詳細](#ログイン用ブラウザの設定)    |
-| BROWSER_PORT          | `8080`             | ログイン用ブラウザ画面のポート                                                     |
-| BROWSER_UI_URL        | サーバの IP から自動検出 | 401 応答の `login_url` に使う URL。[詳細](#ログイン用ブラウザの設定)          |
-| SESSION_TIMEOUT       | `900`              | ログインセッションの自動終了までの秒数                                             |
-| BROWSER_LANG          | `ja,en-US,en`      | ログイン用ブラウザの言語設定                                                       |
-| BROWSER_TZ            | `Asia/Tokyo`       | ログイン用ブラウザのタイムゾーン                                                   |
+| 環境変数               | 既定値                   | 内容                                                                               |
+| ---------------------- | ------------------------ | ---------------------------------------------------------------------------------- |
+| DOWNLOAD_DIR           | `/mnt`                   | 動画の保存先                                                                       |
+| COOKIE_DIR             | `$INSTALL_DIR/cookies`   | cookie プロファイル（ログインセッション）の保存先                                  |
+| WORKER_MAX             | `1`                      | 同時に動く worker の最大数（旧 `WORKER_COUNT` を別名として引き継ぐ）               |
+| API_PORT               | `5000`                   | API のポート                                                                       |
+| POT_PORT               | `4416`                   | PO Token プロバイダのポート（127.0.0.1 限定）                                      |
+| REDIS_TTL              | `604800`                 | redis のジョブ情報の保持期間（秒）                                                 |
+| RETRY_COUNT            | `5`                      | ダウンロードのリトライ回数                                                         |
+| YTDLP_REPO             | `yt-dlp/yt-dlp`          | yt-dlp の取得元（GitHub リポジトリ）                                               |
+| UPDATE_INTERVAL        | `21600`                  | yt-dlp の新版の確認間隔（秒）                                                      |
+| UPDATE_RETRY_INTERVAL  | `1800`                   | 確認・適用に失敗した後の再確認の間隔（秒）                                         |
+| UPDATE_COOLDOWN        | `1800`                   | probe 失敗による確認依頼の最短間隔（秒）                                           |
+| KEEP_VERSIONS          | `2`                      | 導入先に残す yt-dlp の版数                                                         |
+| DISPATCH_SCAN_INTERVAL | `30`                     | dispatcher がジョブを定期確認する間隔（秒）                                        |
+| LEASE_TTL              | `60`                     | worker の生存確認（リース）の有効期間（秒）                                        |
+| HEARTBEAT_INTERVAL     | `10`                     | worker がリースを更新する間隔（秒）                                                |
+| STOP_GRACE             | `20`                     | 停止指示から yt-dlp を強制終了するまでの猶予（秒）                                 |
+| INPROGRESS_STALE       | `21600`                  | 所有者不明の in_progress ジョブを回収するまでの時間（秒）                          |
+| INSTALL_DIR            | `/opt/ytdlpserver`       | ソースの取得先（`install.sh` がここへ clone する）。venv 等もこの直下に展開される  |
+| WITH_NGINX             | `0`                      | `1` で HTTPS（nginx）を有効化。[詳細](#httpsnginx)                                 |
+| SSL_CN                 | `localhost`              | 自己署名証明書の CN。[詳細](#httpsnginx)                                           |
+| WITH_CLOUDFLARED       | `0`                      | `1` で Cloudflare Tunnel を有効化。[詳細](#cloudflare-tunnel)                      |
+| CLOUDFLARE_TOKEN       | なし                     | Cloudflare Tunnel のトークン（`WITH_CLOUDFLARED=1` で必須）                        |
+| WITH_REDIS_INSIGHT     | `1`                      | `1` で Redis◊ の Web UI（5540）を有効化。[詳細](#redis-web-uiの設定)               |
+| REDIS_UI               | `insight`                | Web UI の種類（`insight` / `commander`）。[詳細](#redis-web-uiの設定)              |
+| REDIS_INSIGHT_VERSION  | `3.8.0`                  | ビルドする Redis Insight のタグ。[詳細](#redis-web-uiの設定)                       |
+| RI_BUILD_STORAGE       | `auto`                   | Redis Insight のビルド先（`auto` / `tmpfs` / `disk`）。[詳細](#redis-web-uiの設定) |
+| REDIS_UI_HOST          | `0.0.0.0`                | Web UI の待ち受けアドレス                                                          |
+| WITH_BROWSER           | `1`                      | `1` でログイン用ブラウザ（Chromium）を有効化。[詳細](#ログイン用ブラウザの設定)    |
+| BROWSER_PORT           | `8080`                   | ログイン用ブラウザ画面のポート                                                     |
+| BROWSER_UI_URL         | サーバの IP から自動検出 | 401 応答の `login_url` に使う URL。[詳細](#ログイン用ブラウザの設定)               |
+| SESSION_TIMEOUT        | `900`                    | ログインセッションの自動終了までの秒数                                             |
+| BROWSER_LANG           | `ja,en-US,en`            | ログイン用ブラウザの言語設定                                                       |
+| BROWSER_TZ             | `Asia/Tokyo`             | ログイン用ブラウザのタイムゾーン                                                   |
 
 例: HTTPS を追加し、Redis の Web UI は軽量な commander にする。
 
@@ -228,19 +231,19 @@ WORKER_MAX=4 DOWNLOAD_DIR=/mnt/video sh install.sh
 WITH_NGINX=1 REDIS_UI=commander sh install.sh
 ```
 
-#### HTTPS（nginx）の設定
+##### HTTPS（nginx）の設定
 
 `WITH_NGINX=1` で nginx（443）を導入し、HTTPS を有効にする。自己署名証明書を使い、証明書の CN は `SSL_CN=<ホスト名>` で指定する。
 
 API の URL は `https://<IPアドレス>/download` になる。
 
-#### Cloudflare Tunnelの設定
+##### Cloudflare Tunnelの設定
 
 `WITH_CLOUDFLARED=1 CLOUDFLARE_TOKEN=<トークン>` で Cloudflare Tunnel を有効にする。
 
 - インストール時に、GitHub Releases から cloudflared の最新版を取得し、GitHub API が返すダイジェスト（sha256）と照合してから導入する。
 
-#### Redis Web UIの設定
+##### Redis Web UIの設定
 
 `WITH_REDIS_INSIGHT=1`（既定で有効）で Redis の Web UI を導入する。アクセス先は `http://<IPアドレス>:5540`。`REDIS_UI_HOST` で待ち受けアドレスを変更できる。
 
@@ -265,7 +268,7 @@ API の URL は `https://<IPアドレス>/download` になる。
 RI_BUILD_STORAGE=tmpfs sh install.sh
 ```
 
-#### ログイン用ブラウザの設定
+##### ログイン用ブラウザの設定
 
 `WITH_BROWSER=1`（既定で有効）で、ログインが必要なサイトの cookie を取得するためのブラウザ（Chromium）を導入する。詳しい使い方は[ログインが必要な動画を取得する](#ログインが必要な動画を取得する)を参照。
 
@@ -276,7 +279,7 @@ RI_BUILD_STORAGE=tmpfs sh install.sh
 - 画面（8080）に認証は無い。LAN 内だけで使い、ポートを外部へ公開しない。Cloudflare Tunnel の対象にも含めない。
 - 不要な場合は `WITH_BROWSER=0` で無効化する。
 
-### 4. 動作確認する
+#### 4. 動作確認する
 
 ```sh
 rc-status
@@ -285,23 +288,40 @@ wget -S -O /dev/null http://127.0.0.1:5000/download
 
 `405 METHOD NOT ALLOWED` が返れば API は動作している。
 
-### 運用
+### 設定を変更する方法
+
+環境変数を指定して再実行する（変更する項目だけ指定すればよい。指定しない項目は前回の値のまま）。
 
 ```sh
-## 設定を変更する（変更する項目だけ指定する。指定しない項目は前回の値のまま）
 WORKER_MAX=8 sh install.sh
+```
 
-## 設定値の更新は /etc/conf.d/ytdlpserver の編集 + スクリプトの再実行でも対応可能
+`/etc/conf.d/ytdlpserver` を直接編集してから再実行してもよい。
+
+```sh
 vi /etc/conf.d/ytdlpserver
 sh install.sh
+```
 
-## 状態を見る
+バージョンアップする場合は、最新のインストーラを取得して再実行する。設定・cookie（ログインセッション）・Redis のデータは維持される。
+
+```sh
+wget -O install.sh https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh
+sh install.sh
+```
+
+- `install.sh` はビルド時のコミットに固定されている（ブランチ・タグの付け替えとは食い違わない）ため、更新のたびに取得し直す。
+- `REDIS_INSIGHT_VERSION` など、リリースに追従させる項目は、環境変数で明示しない限り新しいインストーラの既定値へ自動で切り替わる（保存済みの値に固定され続けることはない）。
+- 使われなくなった設定（旧バージョンの名残）は、実行時に警告を出したうえで自動的に削除される。
+- 大きくバージョンをまたぐ場合や、通常のアップデートでうまくいかない場合は、下記の[アンインストール](#アンインストールする方法)を挟んでから新しいインストーラを実行する。
+
+状態を見る・ログを見る・再起動する。
+
+```sh
 rc-status
 
-## ログを見る
 tail -f /var/log/ytdlp-api.log
 
-## 再起動する
 rc-service ytdlp-api restart
 rc-service ytdlp-dispatcher restart
 ```
@@ -315,21 +335,7 @@ rc-service nginx stop
 rc-update del nginx
 ```
 
-### アップデート
-
-最新のインストーラを取得して再実行するだけでよい。設定・cookie（ログインセッション）・Redis のデータは維持される。
-
-```sh
-wget -O install.sh https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh
-sh install.sh
-```
-
-- `install.sh` はビルド時のコミットに固定されている（ブランチ・タグの付け替えとは食い違わない）ため、常に取得し直してから実行する。
-- `REDIS_INSIGHT_VERSION` など、リリースに追従させる項目は、環境変数で明示しない限り新しいインストーラの既定値へ自動で切り替わる（保存済みの値に固定され続けることはない）。
-- 使われなくなった設定（旧バージョンの名残）は、実行時に警告を出したうえで自動的に削除される。
-- 大きくバージョンをまたぐ場合や、通常のアップデートでうまくいかない場合は、下記の[アンインストール](#アンインストール)を挟んでから新しいインストーラを実行する。
-
-### アンインストール
+### アンインストールする方法
 
 `--uninstall` は、アプリ本体（venv・pot-provider・yt-dlp・Redis Insight・OpenRC サービス）だけを削除する。ソース（取得先の `INSTALL_DIR`）・設定（`/etc/conf.d/ytdlpserver`）・cookie・Redis のデータ（ジョブキュー）・動画の保存先はそのまま残る。
 
@@ -367,12 +373,12 @@ iOS ショートカットなどを作成すると楽に操作できる。
 
 ### リクエストの項目
 
-| 項目      | 型     | 内容                                                       |
-| --------- | ------ | ---------------------------------------------------------- |
-| url       | string | ダウンロードする動画の URL                                 |
-| options   | string | yt-dlp のオプション                                        |
-| savedir   | string | 保存先のサブディレクトリ（指定した場合、作成して保存する） |
-| namefield | string | 保存ファイル名のテンプレート（例: `%(title)s-%(id)s`）     |
+| 項目         | 型     | 内容                                                                                                                         |
+| ------------ | ------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| url          | string | ダウンロードする動画の URL                                                                                                   |
+| options      | string | yt-dlp のオプション                                                                                                          |
+| savedir      | string | 保存先のサブディレクトリ（指定した場合、作成して保存する）                                                                   |
+| namefield    | string | 保存ファイル名のテンプレート（例: `%(title)s-%(id)s`）                                                                       |
 | auth_profile | string | 使う cookie プロファイル名。省略すると URL のサイトから自動で選ぶ（[ログインが必要な動画](#ログインが必要な動画を取得する)） |
 
 `namefield` は yt-dlp の `%(key)s` 形式で指定する。拡張子は自動で付く。
@@ -381,15 +387,15 @@ iOS ショートカットなどを作成すると楽に操作できる。
 
 `options` には yt-dlp のオプションを指定する。
 
-| やりたいこと                     | オプション                                             |
-| -------------------------------- | ------------------------------------------------------ |
-| YouTube の音声を日本語にする     | `-f "bestaudio[ext=m4a][language^=ja]"`                |
-| タイトル等を日本語の翻訳にする   | `--extractor-args youtube:lang=ja`（音声は変わらない） |
-| ファイル名の文字化けを防ぐ       | `--windows-filenames`                                  |
+| やりたいこと                     | オプション                                                                              |
+| -------------------------------- | --------------------------------------------------------------------------------------- |
+| YouTube の音声を日本語にする     | `-f "bestaudio[ext=m4a][language^=ja]"`                                                 |
+| タイトル等を日本語の翻訳にする   | `--extractor-args youtube:lang=ja`（音声は変わらない）                                  |
+| ファイル名の文字化けを防ぐ       | `--windows-filenames`                                                                   |
 | ログインして取得する             | `options` ではなく cookie プロファイルを使う（[後述](#ログインが必要な動画を取得する)） |
-| 出力形式を mp4 にする            | `--merge-output-format mp4`                            |
-| コーデックを avc1 (mp4) にする   | `-f "bestvideo[vcodec^=avc1][ext=mp4]"`                |
-| 同じファイルを再ダウンロードする | `--force-overwrites`                                   |
+| 出力形式を mp4 にする            | `--merge-output-format mp4`                                                             |
+| コーデックを avc1 (mp4) にする   | `-f "bestvideo[vcodec^=avc1][ext=mp4]"`                                                 |
+| 同じファイルを再ダウンロードする | `--force-overwrites`                                                                    |
 
 ---
 
@@ -401,13 +407,13 @@ iOS ショートカットなどを作成すると楽に操作できる。
 1. ブラウザでログインして、プロファイルを保存する（[下記](#ブラウザでログインして-cookie-を保存する)）。
 2. いつもどおり `/download` に URL を送る。URL のサイトに対応するプロファイルが保存されていれば、自動で使われる。
 
-| プリセット（最初から選べるサイト） | プロファイル名 | 対象のドメイン |
-| ---------------------------------- | -------------- | -------------- |
+| プリセット（最初から選べるサイト） | プロファイル名 | 対象のドメイン                    |
+| ---------------------------------- | -------------- | --------------------------------- |
 | YouTube                            | `youtube`      | youtube.com, youtu.be, google.com |
-| ニコニコ                           | `niconico`     | nicovideo.jp, nico.ms |
-| Instagram                          | `instagram`    | instagram.com |
-| X (Twitter)                        | `x`            | x.com, twitter.com |
-| Bilibili                           | `bilibili`     | bilibili.com, b23.tv |
+| ニコニコ                           | `niconico`     | nicovideo.jp, nico.ms             |
+| Instagram                          | `instagram`    | instagram.com                     |
+| X (Twitter)                        | `x`            | x.com, twitter.com                |
+| Bilibili                           | `bilibili`     | bilibili.com, b23.tv              |
 
 それ以外のサイトも、ログイン画面で「新しいサイトを追加」から使える。一度保存すると、次回からプルダウンで選べ、自動選択の対象にもなる。
 
@@ -470,17 +476,17 @@ cookie が未指定・未登録・失効しているときは、リクエスト�
 }
 ```
 
-| 項目        | 内容                                                      |
-| ----------- | --------------------------------------------------------- |
-| reason      | 下表                                                      |
+| 項目         | 内容                                                                    |
+| ------------ | ----------------------------------------------------------------------- |
+| reason       | 下表                                                                    |
 | auth_profile | 対象のプロファイル（明示指定、または自動で選んだもの）。無ければ `null` |
-| login_url   | 再ログイン用の画面の URL。設定されていなければ `null`    |
+| login_url    | 再ログイン用の画面の URL。設定されていなければ `null`                   |
 
-| reason            | 意味                                                   |
-| ----------------- | ------------------------------------------------------ |
+| reason            | 意味                                                                         |
+| ----------------- | ---------------------------------------------------------------------------- |
 | `cookie_missing`  | ログインが必要だが、対応するプロファイルが無い（新しいサイトとして追加する） |
-| `profile_unknown` | プロファイルの cookie が保存されていない               |
-| `cookie_expired`  | cookie が失効している                                  |
+| `profile_unknown` | プロファイルの cookie が保存されていない                                     |
+| `cookie_expired`  | cookie が失効している                                                        |
 
 - cookie を更新すると、サーバを再起動しなくても `valid` に戻る。
 - キューに積んだ後で cookie が失効した場合は、ジョブが失敗し、ジョブ情報に `error_code=login_required` が入る。cookie を更新するまで自動リトライはしない。
