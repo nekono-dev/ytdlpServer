@@ -40,3 +40,18 @@
 - [x] 単体テスト
 
 検証は [../browserServer/tasks.md](../browserServer/tasks.md) の Phase 4 を参照（API の自動選択を含めて実施）。
+
+## イベント駆動の worker 起動と yt-dlp の更新方式の見直し（実装・検証完了）
+
+要件は [requirements.md](requirements.md)（A12〜A16）、設計は [design.md](design.md)。実機検証は [../workerServer/tasks.md](../workerServer/tasks.md) と合わせて実施した。
+
+- [x] `push_jobs` の `RPUSH` の後に `queued` を通知する（失敗しても受付は成功）
+- [x] `/download/retry` の更新後に `queued` を通知する
+- [x] probe の失敗（`RuntimeError`）で、`os._exit` を廃止し、`check_update` を通知して 400 を返す
+- [x] `/download/retry` を項目単位の `HSET` に変え、存在しなかったキーへの誤生成を検知して削除する
+- [x] `entrypoint.sh` から `pip install --upgrade` と `SERVER_TTL` のタイマーを除く。`Dockerfile` に導入先の `PATH`・イメージ同梱の版・プラグインの置き場を設ける（ビルドコンテキストをリポジトリ直下に変更し、`workerServer/src/updater.py` を共有する）
+- [x] `requirements.txt` から `yt-dlp[curl_cffi]` を除く
+- [x] compose 3 種: `SERVER_TTL` を除き、`ytdlp-bin` を読み取り専用でマウントする
+- [x] 単体テスト（通知の発行、通知失敗時に受付が成功すること、probe 失敗で再起動しないこと。`tests/test_api.py` の `os._exit` のモックを置き換えた）
+
+検証: 検証サーバの Docker Compose で、probe 失敗時に 400 と `check_update` 通知（再起動しない）、`/download` 成功時の `queued` 通知、api コンテナが `ytdlp-bin` ボリューム（読み取り専用）から dispatcher の更新した yt-dlp を参照できることを確認した。`/download/retry` の項目単位更新は単体テストで確認（実機での競合再現は未実施）。

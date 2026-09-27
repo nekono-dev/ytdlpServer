@@ -7,34 +7,58 @@ services:
   pot-provider:
     image: brainicism/bgutil-ytdlp-pot-provider
     restart: always
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy
+    environment:
+      # dispatcher に許可する Docker API: コンテナの作成・起動・停止・一覧・inspect
+      # (CONTAINERS)、それらの実行 (POST)、終了の検知 (EVENTS) のみ。イメージ・
+      # exec・ボリューム・ネットワーク操作は許可しない (既定で拒否)。
+      CONTAINERS: 1
+      POST: 1
+      EVENTS: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: always
   api:
-    build: ./apiServer
+    build:
+      context: .
+      dockerfile: apiServer/Dockerfile
     depends_on:
       - redis
       - pot-provider
     environment:
       REDIS_URL: redis://redis
-      SERVER_TTL: 24
       BROWSER_UI_URL: ${BROWSER_UI_URL:-}
     volumes:
       - ./cookies:/cookies
+      - ytdlp-bin:/opt/ytdlp:ro
     restart: always
     ports:
       - 5000:5000
-  worker:
-    build: ./workerServer
+  # dispatcher: ジョブがあるときだけ worker コンテナを起動する常駐サービス。
+  # worker はここから起動されるため、compose の個別サービスには無い
+  # (`docker compose ps` には worker コンテナが動いている間だけ現れる)。
+  dispatcher:
+    build:
+      context: .
+      dockerfile: workerServer/Dockerfile
     depends_on:
       - redis
       - pot-provider
+      - docker-proxy
     environment:
       REDIS_URL: redis://redis
       REDIS_TTL: 604800
       RETRY_COUNT: 5
       BROWSER_UI_URL: ${BROWSER_UI_URL:-}
       DOWNLOAD_DIR: /download
+      DISPATCH_MODE: docker
+      DOCKER_HOST: tcp://docker-proxy:2375
+      WORKER_MAX: ${WORKER_MAX:-1}
     volumes:
       - /mnt:/download
       - ./cookies:/cookies
+      - ytdlp-bin:/opt/ytdlp
     restart: always
   browser:
     build: ./browserServer
@@ -60,3 +84,6 @@ services:
     depends_on:
       - redis
     restart: always
+
+volumes:
+  ytdlp-bin:

@@ -5,7 +5,7 @@ yt-dlp をキュー経由で実行する API サーバ。ここでは、複数�
 | アプリ | 役割 | 要件 |
 |---|---|---|
 | apiServer | リクエスト受付・解析・ジョブ投入 | [apiServer/requirements.md](apiServer/requirements.md) |
-| workerServer | ジョブ実行 | [workerServer/requirements.md](workerServer/requirements.md) |
+| workerServer | ジョブ実行、およびジョブがあるときだけ worker を起動する dispatcher | [workerServer/requirements.md](workerServer/requirements.md) |
 | browserServer | ブラウザでのログインと cookie 取得（新規） | [browserServer/requirements.md](browserServer/requirements.md) |
 
 ## cookie セッション認証
@@ -60,3 +60,75 @@ YouTube・ニコニコに加え、Web の利用が多く、yt-dlp でログイ�
 - CAPTCHA の自動突破、外部の解答サービスの利用。
 - 外部への通知（Webhook など）。ログイン要求はレスポンスで返す。
 - 同じサイトの複数アカウントの使い分け（プロファイルはサイト単位を想定する）。
+
+## イベント駆動の worker 起動と yt-dlp の更新方式の見直し
+
+### 背景
+
+- worker は「1 件処理するか、キューが空なら一定時間で終了する」設計で、コンテナ（プロセス）の再起動機構が worker を起動し直している。起動のたびに yt-dlp を更新（`pip install --upgrade`）するため、ジョブが無くても約 1 分ごとに pypi.org へ DNS 問い合わせ・通信が発生している。
+- apiServer は、yt-dlp を更新するために、定期（`SERVER_TTL`）と probe 失敗時にプロセスごと再起動している。再起動を挟むため、更新のタイミングが不定で、再起動中のリクエストも失敗する。
+- worker が処理中に停止・異常終了すると、ジョブが `in_progress` のまま残って再実行されない。イベント駆動では worker の起動・停止が増えるため、この問題が顕在化しやすい。
+
+### 目的
+
+- ジョブが無い間は worker を動かさず、ジョブが投入されたときだけ起動する（イベント駆動）。
+- yt-dlp は、プロセスの再起動なしに、新版の確認と適用を定期的に行う。apiServer と worker で同じ導入済みの版を使い、更新は 1 か所で行う。
+- worker が中断されても、ジョブが失われたり `in_progress` のまま残ったりしない。
+- Docker Compose と Alpine（Docker 無し）のどちらでも同じ挙動にする。
+
+### 要求
+
+#### worker の起動
+
+| ID | 要求 | 対象 |
+|---|---|---|
+| E1 | 処理対象のジョブ（キュー内のジョブ、自動リトライの対象）が無い間は、worker のコンテナ・プロセスが存在しない | worker |
+| E2 | ジョブが投入されたら、数秒以内に worker が起動して処理を始める | api, worker |
+| E5 | 同時に動く worker の最大数を設定できる（既定 1）。処理対象のジョブの数に応じて、最大数まで並列に起動する | worker |
+| E6 | Docker Compose と Alpine の両方で、本節の要求を満たす。設定名・動作を揃える | worker |
+| E7 | 自動リトライ（`failed` のジョブの再実行）と、`/download/retry` による再実行も、E1・E2・E5 の契機として扱う | api, worker |
+| E8 | 起動役（dispatcher）に与える権限を最小にする。ジョブの内容（URL・オプション）を dispatcher に解釈させない | worker |
+
+#### yt-dlp の更新
+
+| ID | 要求 | 対象 |
+|---|---|---|
+| E3 | 処理対象のジョブが無い間、外部への定期的な通信は、yt-dlp の新版の確認だけとする（間隔を設定でき、既定 6 時間）。pypi.org へはアクセスしない | worker |
+| E4 | 新版の確認を定期的に行い、新版があるときだけ取得して適用する。確認・取得・検証に失敗しても、導入済みの版で処理を続ける | worker |
+| E10 | apiServer と worker が、同じ導入済みの yt-dlp を使う。更新は 1 か所が行い、各プロセスの再起動なしに反映される | api, worker |
+| E11 | 更新の適用は、実行中の probe・ジョブに影響しない。取得物は、チェックサムと実行確認に通ったものだけを適用する | worker |
+| E12 | probe や実行の失敗を契機に、新版の確認を依頼できる。依頼が続いても、確認の頻度には上限を設ける | api, worker |
+| E13 | apiServer は、yt-dlp を更新するためにプロセスを再起動しない | api |
+
+#### worker のライフサイクル
+
+| ID | 要求 | 対象 |
+|---|---|---|
+| E14 | キューから取り出したジョブは、worker が処理の記録を作る前に停止・異常終了しても、失われない | worker |
+| E15 | worker が処理中に停止・異常終了しても、ジョブが `in_progress` のまま放置されず、一定時間内に再実行の対象になる | worker |
+| E16 | 同じジョブを、複数の worker が同時に実行しない | worker |
+| E17 | 停止の指示（SIGTERM）で中断したジョブは、リトライ回数を消費しない。異常終了で中断したジョブは、消費する（原因が繰り返す場合に止めるため） | worker |
+| E18 | 中断したジョブの再実行は、途中まで保存したファイルがあれば、そこから再開できる | worker |
+
+#### 互換
+
+| ID | 要求 | 対象 |
+|---|---|---|
+| E9 | API のエンドポイント・キューの形式、cookie セッション認証（R1〜R13）の挙動を変えない。ジョブ hash は項目の追加のみとする | 全て |
+
+### 制約
+
+- Redis は既存のものを使う。メッセージブローカーなど、新しいミドルウェアを追加しない。
+- worker は、従来どおり「1 件処理して終了する」プロセスとする（並列度は worker の起動数で表す）。
+- 導入する yt-dlp は、Alpine（musl）で動くものとする。
+
+### 非機能要件
+
+- 待機中の dispatcher の負荷（CPU・メモリ・Redis への問い合わせ）を小さく保つ。
+- 通知（イベント）を取りこぼしても、ジョブが処理されないまま残らない（定期的な確認で回収する）。
+- dispatcher が停止・再起動しても、実行中の worker とジョブの状態を把握し直せる。
+
+### スコープ外
+
+- Kubernetes・Swarm など他のオーケストレータへの対応。
+- yt-dlp のリリースの署名（`SHA2-256SUMS.sig`、GPG）の検証。`SHA2-256SUMS` によるチェックサムの照合のみ行う（採用しない判断は [design.md](design.md)）。

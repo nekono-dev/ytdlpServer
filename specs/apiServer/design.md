@@ -89,3 +89,58 @@ flowchart TD
 - 自動で選んだプロファイルも、ジョブ（キューの JSON）の `auth_profile` に入れる。予約（`/schedule`）は、実行時（`/download/scheduled`）に選ぶ。
 - 401 の `login_url` は、プロファイルが決まれば `?profile=<name>`、決まらなければ従来どおり `?start_url=<origin>`。
 - `GET /auth/profiles` は、cookie ファイルのあるプロファイルに、定義の `label` と `domains` を付けて返す。
+
+## イベント駆動の worker 起動と yt-dlp の更新方式の見直し
+
+全体の構成は [../design.md](../design.md)。dispatcher の動作は [../workerServer/design.md](../workerServer/design.md)。
+
+### 通知
+
+Redis のチャンネル `ytdlp:events` へ発行する。メッセージは種別を表す。
+
+| 契機 | 種別 | 発行の位置 |
+|---|---|---|
+| ジョブの投入（`push_jobs`） | `queued` | `RPUSH ytdlp:queue` の後 |
+| `/download/retry` | `queued` | `failed_count` を 0 に戻した後 |
+| yt-dlp の probe の失敗 | `check_update` | 400 を返す前 |
+
+- 通知の発行に失敗しても、ジョブの投入・リトライ・400 の結果は変えない。ログに `WARNING` を出すだけとする（dispatcher の定期スキャンが回収する）。
+- 通知は「合図」で、dispatcher は種別だけを使う。キューの形式・レスポンスは変えない（`message` を除く）。
+
+### probe の失敗時（A14）
+
+```mermaid
+flowchart TD
+    P[probe] --> R{結果}
+    R -- 成功 --> OK[ジョブを投入]
+    R -- ログイン要求 --> L["401（従来どおり）<br>再起動・通知なし"]
+    R -- yt-dlp の失敗<br>RuntimeError --> F["check_update を通知<br>400 を返す"]
+    R -- namefield の誤り --> V["400（従来どおり）"]
+```
+
+- 従来の「`os._exit` でプロセスを終了して再起動する」処理を廃止する。
+- 400 の `message` は `yt-dlp probe failed; requested a yt-dlp update check.` とする（旧: `...wait restart yt-dlp.`）。
+- probe の失敗は、URL・動画の問題でも起きる。新版の確認は dispatcher のクールダウン（`UPDATE_COOLDOWN`）で頻度が抑えられ、新版が無ければ何も起きない。
+- 新版があれば、dispatcher が数秒〜数十秒で切り替える。次のリクエストから、再起動なしに新版が使われる（`yt-dlp` を `subprocess` で呼ぶため、実体の差し替えが次の呼び出しに反映される）。
+
+### yt-dlp の参照（A15）
+
+- `PATH` の先頭に導入先の `current`（`YTDLP_DIR/current`）を置く。導入先が空のときは、イメージ同梱の版へ落ちる。
+- Compose では、名前付きボリューム `ytdlp-bin` を読み取り専用（`:ro`）でマウントする。
+- `entrypoint.sh` から、`pip install --upgrade` と、`SERVER_TTL` のタイマー（定期の SIGTERM）を除く。起動は `exec python3 -u main.py` のみとする。
+
+### `/download/retry` の競合の解消
+
+`retry_failed_jobs` は、`hgetall(key)` の後に `hset(key, mapping=data)` で hash 全体を書き戻していた。
+その間に worker が同じキーを `RENAME` で `in_progress` へ取得すると、`failed` のキーが存在しないまま再作成されてしまう
+（新しいイベント駆動の worker では、並列 worker により取得の機会が増えるため顕在化しやすい）。
+
+`HSET key failed_count 0` のように、更新する項目（`failed_count`）だけを指定して呼ぶ形に変える。
+存在しないキーへの `HSET` は、Redis がそのキーを新規作成してしまう点は変わらないが、
+戻り値（新規作成したフィールド数）で「直前まで存在しなかったキーに書いてしまったか」を判定できるため、
+その場合は作成した hash を削除して `reset_count` に含めない。
+
+### `SERVER_TTL` の廃止（A16）
+
+- 環境変数 `SERVER_TTL` は使わない。設定されていても無視する。compose・README・Alpine の設定から除く。
+- Alpine の `run-api` は、`timeout` での停止と、起動時の `update-ytdlp` を除く。

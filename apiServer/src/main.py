@@ -4,8 +4,6 @@ import json
 import os
 import re
 import sys
-import threading
-import time
 import unicodedata
 
 import redis
@@ -27,6 +25,7 @@ PORT = int(os.environ.get("PORT", "5000"))
 QUEUE_PREFIX_BASE = "ytdlp:queue"
 REQUESTS_PREFIX_BASE = "ytdlp:requests"
 JOBS_PREFIX_BASE = "ytdlp:jobs"
+EVENTS_CHANNEL = "ytdlp:events"
 
 try:
     redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
@@ -141,6 +140,21 @@ def add_request(
         print("WARNING: Failed to push request to Redis:", e)
         raise
 
+def notify(kind: str) -> None:
+    """dispatcher (workerServer) へ「再評価せよ」の合図を送る。
+
+    メッセージの内容は使われない (kind は種別のログ用)。通知に失敗しても、
+    呼び出し側の処理結果 (ジョブの投入・リトライ) は変えない
+    (dispatcher の定期スキャンが取りこぼしを回収するため)。
+    """
+    if redis_client is None:
+        return
+    try:
+        redis_client.publish(EVENTS_CHANNEL, kind)
+    except Exception as e:
+        print("WARNING: Failed to publish event:", kind, e)
+
+
 def push_jobs(jobs: list[dict]) -> int:
     entries = [json.dumps(job, ensure_ascii=False) for job in jobs]
     if DEBUG_MODE:
@@ -157,6 +171,7 @@ def push_jobs(jobs: list[dict]) -> int:
         except Exception as e:
             print("WARNING: Failed to push jobs to Redis:", e)
             raise
+        notify("queued")
 
     return len(entries)
 
@@ -255,19 +270,14 @@ def handle_download(
     except cookies.LoginRequiredError as e:
         # ログイン要求はサーバ不調ではないため、プロセス再起動は行わない
         return login_required_from(e, profile, url, candidate)
-    except RuntimeError:
-        print("ERROR: yt-dlp probe failed — process exit.")
-
-        def _exit_later(delay: float = 0.5) -> None:
-            time.sleep(delay)
-            print("INFO: Exiting process now (yt-dlp probe failure).")
-            os._exit(1)
-
-        t = threading.Thread(target=_exit_later, args=(0.5,), daemon=True)
-        t.start()
-
+    except RuntimeError as e:
+        # yt-dlp の失敗は、更新で直る場合がある。プロセスは再起動せず (E13)、
+        # dispatcher に新版の確認を依頼する (頻度は dispatcher 側のクールダウンで
+        # 抑えられる)。原因は URL・動画側の問題であることも多い。
+        print("ERROR: yt-dlp probe failed:", e)
+        notify("check_update")
         return jsonify(
-            {"message": "yt-dlp probe failed; wait restart yt-dlp."}), 400
+            {"message": "yt-dlp probe failed; requested a yt-dlp update check."}), 400
     except ValueError as e:
         print("ERROR: invalid namefield:", e)
         return jsonify({"message": str(e)}), 400
@@ -429,22 +439,25 @@ def retry_failed_jobs() -> tuple[dict, int]:
          # use scan_iter for safe iteration
          for key in redis_client.scan_iter(match=primary_pattern):
              try:
-                 # try hash map
-                 data = redis_client.hgetall(key)
-                 if data:
-                     # hset mapping expects strings
-                     data["failed_count"] = "0"
-                     redis_client.hset(key, mapping=data)
-                     reset_count += 1
+                 # 項目単位 (failed_count のみ) で更新する。hgetall → hset (全体書き戻し)
+                 # だと、その間に worker が同じキーを in_progress へ RENAME した場合に
+                 # 空の hash を作り直してしまう (積み残しだった競合の解消)。
+                 # HSET の戻り値 (新規作成したフィールド数) で、直前まで存在しなかった
+                 # キーに書いてしまったかを判定できる: そのケースは作った hash を消す。
+                 created = redis_client.hset(key, "failed_count", "0")
+                 if created:
+                     redis_client.delete(key)
                      continue
-                 # unknown format, skip
-                 print("WARNING: unknown job data format for key:", key)
+                 reset_count += 1
              except Exception as e:
                  print("WARNING: failed to reset failed_count for key", key, e)
                  continue
      except Exception as e:
          print("ERROR: failed scanning failed jobs:", e)
          return jsonify({"message": "Internal server error."}), 500
+
+     if reset_count:
+         notify("queued")
 
      return jsonify({
          "message": "Reset failed_count for failed jobs.", "count": reset_count}), 200

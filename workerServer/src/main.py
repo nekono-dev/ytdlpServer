@@ -2,24 +2,28 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import socket
+import subprocess
 import sys
+import threading
 import time
 from typing import Any
 
-import cookies
 import redis
+
+import cookies
+import jobs
 from function import run_yt_dlp
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
-QUEUE_KEY = "ytdlp:queue"
-# New spec: job status keys include status in key name
-# Format: ytdlp:jobs:<status>:<job_id>
-JOBS_PREFIX_BASE = "ytdlp:jobs"
-BRPOP_TIMEOUT = int(os.environ.get("BRPOP_TIMEOUT", "60"))
 REDIS_TTL = int(os.environ.get("REDIS_TTL", str(7 * 24 * 60 * 60)))
 RETRY_COUNT = int(os.environ.get("RETRY_COUNT", "5"))
+LEASE_TTL = int(os.environ.get("LEASE_TTL", "60"))
+HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "10"))
+STOP_GRACE = int(os.environ.get("STOP_GRACE", "20"))
 
-redis_message="Redis client not initialized"
+redis_message = "Redis client not initialized"
 
 redis_client: redis.Redis | None = None
 
@@ -29,102 +33,7 @@ try:
     print("INFO: Connected to Redis:", REDIS_URL)
 except Exception as e:
     print("ERROR: Failed to connect to Redis:", e)
-    # Exit immediately so orchestration can restart/update configuration
     sys.exit(1)
-
-
-def _to_str(v: Any) -> str:
-    """Convert common types to strings for safe Redis storage.
-
-    - `list`/`dict` -> JSON string
-    - `None` -> empty string
-    - others -> `str(v)`
-    """
-    if isinstance(v, (list, dict)):
-        return json.dumps(v, ensure_ascii=False)
-    return "" if v is None else str(v)
-
-def make_job_hash(job_id: str, job: dict[str, Any]) -> str:
-    if redis_client is None:
-        raise RuntimeError(redis_message)
-    key = f"{JOBS_PREFIX_BASE}:pending:{job_id}"
-    # Ensure all stored hash values are strings. Lists/dicts are JSON-encoded.
-    mapping = {
-        "status": "pending",
-        "url": _to_str(job.get("url", "")),
-        "options": _to_str(job.get("options", [])),
-        "savedir": _to_str(job.get("savedir") or ""),
-        "created_at": _to_str(time.time()),
-        "failed_count": "0",
-        "filename": _to_str(job.get("filename") or job_id),
-        "auth_profile": _to_str(job.get("auth_profile") or ""),
-    }
-    redis_client.hset(key, mapping=mapping)
-    try:
-        redis_client.expire(key, REDIS_TTL)
-    except Exception:
-        print("WARN: Failed to set TTL for", key)
-    return key
-
-
-def update_status(key: str, status: str, extra: dict[str, Any] | None = None) -> str:
-    """
-    Move job hash to a new key that embeds the `status` (per spec).
-
-    Returns the new key name.
-    """
-    if redis_client is None:
-        raise RuntimeError(redis_message)
-
-    # extract job_id (works for both old and new formats)
-    try:
-        job_id = key.split(":")[-1]
-    except Exception:
-        job_id = key
-
-    new_key = f"{JOBS_PREFIX_BASE}:{status}:{job_id}"
-
-    # use module-level _to_str helper
-    # If no migration is necessary (same key), just update fields
-    if key == new_key:
-        mapping: dict[str, str] = {"status": _to_str(status)}
-        if extra:
-            for k, v in extra.items():
-                mapping[k] = _to_str(v)
-        redis_client.hset(key, mapping=mapping)
-        try:
-            redis_client.expire(key, REDIS_TTL)
-        except Exception:
-            print("WARN: Failed to set TTL for", key)
-        return key
-
-    # Read existing data, merge updates, write to new key, then delete old key
-    try:
-        existing = redis_client.hgetall(key) or {}
-    except Exception:
-        existing = {}
-
-    # ensure existing fields are strings (and JSON-encode lists/dicts)
-    mapping: dict[str, str] = {k: _to_str(v) for k, v in existing.items()}
-    mapping["status"] = _to_str(status)
-    if extra:
-        for k, v in extra.items():
-            mapping[k] = _to_str(v)
-
-    redis_client.hset(new_key, mapping=mapping)
-    try:
-        redis_client.expire(new_key, REDIS_TTL)
-    except Exception:
-        print("WARN: Failed to set TTL for", new_key)
-
-    # remove old key if exists and is different
-    try:
-        if key != new_key:
-            redis_client.delete(key)
-    except Exception:
-        print("WARN: Failed to delete old key", key)
-
-    return new_key
 
 
 def record_failure(
@@ -147,89 +56,12 @@ def record_failure(
         if auth_profile:
             cookies.mark_expired(redis_client, auth_profile)
         print("WARNING: login required. profile:", auth_profile or "(none)")
-    return update_status(key, "failed", extra)
+    return jobs.update_status(redis_client, key, "failed", extra, REDIS_TTL)
 
 
-def handle_job(raw: str) -> None:
-    try:
-        job = json.loads(raw)
-    except Exception:
-        print("ERROR: Failed to parse job JSON:", raw)
-        return
-
-    # Prefer yt-dlp provided id if present; fallback to generated UUID
-    jid = job.get("id")
-    if not isinstance(jid, str) or not jid.strip():
-        print("ERROR: Failed to get id")
-        return
-    key = make_job_hash(jid, job)
-    # mark in_progress (update_status returns the new key)
-    key = update_status(key, "in_progress", {"started_at": str(time.time())})
-
-    ok, output = run_yt_dlp(job)
-
-    if ok:
-        key = update_status(
-            key, "completed", {"completed_at": str(time.time()), "output": output})
-    else:
-        # increment failed_count on current key, then migrate to failed
-        key = record_failure(key, job.get("auth_profile"), output, job.get("url"))
-
-
-def is_waiting_for_login(key: str) -> bool:
-    """ログイン要求で失敗し、cookie がまだ有効に戻っていないジョブか。
-
-    cookie を入れ直す(valid に戻る)まで再試行しない。
-    プロファイル未指定のログイン要求は再試行しても解決しないため常に対象外。
-    """
-    try:
-        data = redis_client.hgetall(key) or {}
-    except Exception:
-        return False
-    if data.get("error_code") != "login_required":
-        return False
-    profile = data.get("auth_profile") or ""
-    if not profile:
-        return True
-    return cookies.profile_state(redis_client, profile) != "valid"
-
-
-def find_retryable_failed_key() -> str | None:
-    """Scan for failed keys that have failed_count < RETRY_COUNT and return one key or None."""
-    if redis_client is None:
-        raise RuntimeError(redis_message)
-
-    pattern = f"{JOBS_PREFIX_BASE}:failed:*"
-    try:
-        for k in redis_client.scan_iter(match=pattern):
-            try:
-                cnt = int(redis_client.hget(k, "failed_count") or 0)
-            except Exception:
-                cnt = 0
-            if cnt < RETRY_COUNT and not is_waiting_for_login(k):
-                return k
-    except Exception:
-        # Fallback: no retryable key found or scan failed
-        return None
-    print("INFO: Not found retryable failed job.")
-    return None
-
-
-def process_failed_key(key: str) -> None:
-    """Transition failed key -> in_progress, run yt-dlp, then mark completed/failed."""
-    if redis_client is None:
-        raise RuntimeError(redis_message)
-
-    # Move to in_progress
-    key = update_status(key, "in_progress", {"started_at": str(time.time())})
-
-    # Build job dict from hash
-    try:
-        data = redis_client.hgetall(key) or {}
-    except Exception:
-        data = {}
-
-    job = {
+def _load_job_from_hash(key: str) -> dict[str, Any]:
+    data = redis_client.hgetall(key) or {}
+    return {
         "url": data.get("url", ""),
         "options": json.loads(data.get("options", "[]") or "[]"),
         "savedir": data.get("savedir", ""),
@@ -238,50 +70,163 @@ def process_failed_key(key: str) -> None:
         "id": key.split(":")[-1],
     }
 
-    ok, output = run_yt_dlp(job)
 
-    if ok:
-        update_status(key, "completed", {"completed_at": str(time.time()), "output": output})
-    else:
-        record_failure(key, job.get("auth_profile"), output, job.get("url"))
+def _execute(
+        job: dict[str, Any],
+        stop_requested: threading.Event) -> tuple[str, str]:
+    """yt-dlp を実行する。停止指示が来たら子プロセスを止めて中断扱いにする。"""
+    proc_holder: dict[str, subprocess.Popen] = {}
+    result_box: dict[str, tuple[bool, str]] = {}
+
+    def on_start(proc: subprocess.Popen) -> None:
+        proc_holder["proc"] = proc
+
+    def runner() -> None:
+        result_box["result"] = run_yt_dlp(job, on_process_start=on_start)
+
+    t = threading.Thread(target=runner)
+    t.start()
+    while t.is_alive():
+        if stop_requested.wait(timeout=0.3):
+            break
+
+    if stop_requested.is_set():
+        proc = proc_holder.get("proc")
+        if proc is not None and proc.poll() is None:
+            print("INFO: Stopping yt-dlp (SIGTERM) due to stop request")
+            proc.send_signal(signal.SIGTERM)
+            try:
+                proc.wait(timeout=STOP_GRACE)
+            except subprocess.TimeoutExpired:
+                print("WARNING: yt-dlp did not stop in time; killing")
+                proc.kill()
+        t.join()
+        return "interrupted", "stopped by signal (SIGTERM/SIGINT)"
+
+    t.join()
+    ok, output = result_box["result"]
+    return ("completed", output) if ok else ("failed", output)
+
+
+def _heartbeat_loop(
+        worker_id: str, finished: threading.Event,
+        stop_requested: threading.Event) -> None:
+    """リースを更新し続ける。更新できない状態が LEASE_TTL 続いたら、実行中のジョブを
+    停止指示があった場合と同じ扱いにして中止する(W25: 同時実行の防止)。
+    リースが切れた後は、dispatcher が別 worker にジョブを渡しうるため。
+    """
+    last_success = time.time()
+    while not finished.is_set():
+        try:
+            jobs.renew_lease(redis_client, worker_id, LEASE_TTL)
+            last_success = time.time()
+        except Exception as e:
+            print("WARNING: Failed to renew lease:", e)
+            if time.time() - last_success >= LEASE_TTL and not stop_requested.is_set():
+                print(
+                    "WARNING: Lease could not be renewed for", LEASE_TTL,
+                    "seconds — stopping current job")
+                stop_requested.set()
+        finished.wait(HEARTBEAT_INTERVAL)
+
+
+def run_once(worker_id: str, stop_requested: threading.Event) -> int:
+    key: str | None = None
+    job: dict[str, Any] | None = None
+
+    try:
+        key = jobs.take_retryable_failed(redis_client, RETRY_COUNT, worker_id)
+        if key:
+            job = _load_job_from_hash(key)
+            print("INFO: Retrying failed job:", key)
+        else:
+            raw = jobs.take_from_queue(redis_client, worker_id)
+            if raw is None:
+                print("INFO: No job found in queue or retryable failed jobs; exiting")
+                return 0
+            try:
+                job = json.loads(raw)
+            except Exception:
+                print("ERROR: Failed to parse job JSON:", raw)
+                jobs.discard_processing(redis_client, worker_id, raw)
+                return 0
+            jid = job.get("id")
+            if not isinstance(jid, str) or not jid.strip():
+                print("ERROR: Failed to get id")
+                jobs.discard_processing(redis_client, worker_id, raw)
+                return 0
+            key = jobs.commit_from_processing(
+                redis_client, worker_id, jid, job, REDIS_TTL)
+            print("INFO: Pulled job from queue:", key)
+    except redis.RedisError as e:
+        print("ERROR: Redis error while acquiring job:", e)
+        return 1
+
+    if stop_requested.is_set():
+        # 取得直後に停止指示が来ていた場合も、実行せず中断扱いに戻す
+        if jobs.is_owner(redis_client, key, worker_id):
+            jobs.mark_interrupted(
+                redis_client, key, consume_retry=False,
+                reason="stopped before execution", ttl=REDIS_TTL)
+        return 0
+
+    status, output = _execute(job, stop_requested)
+
+    if not jobs.is_owner(redis_client, key, worker_id):
+        # dispatcher に回収され、既に別の worker の所有になっている
+        print("WARNING: Lost ownership of job (reclaimed); not recording result:", key)
+        return 0
+
+    if status == "interrupted":
+        jobs.mark_interrupted(
+            redis_client, key, consume_retry=False, reason=output, ttl=REDIS_TTL)
+        print("INFO: Job interrupted by stop signal; will retry (no retry consumed)")
+        return 0
+    if status == "completed":
+        jobs.update_status(
+            redis_client, key, "completed",
+            {"completed_at": str(time.time()), "output": output}, REDIS_TTL)
+        print("INFO: Job completed; exiting")
+        return 0
+
+    record_failure(key, job.get("auth_profile"), output, job.get("url"))
+    print("INFO: Job failed; exiting")
+    return 0
 
 
 def main() -> int:
     print("INFO: Worker started — processing at most one job then exit")
+    worker_id = f"{socket.gethostname()}-{os.getpid()}-{int(time.time() * 1000)}"
+    stop_requested = threading.Event()
+    finished = threading.Event()
+
+    def _handle_signal(signum: int, _frame: object) -> None:
+        print(f"INFO: Signal {signum} received — interrupting current job")
+        stop_requested.set()
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
+
+    jobs.acquire_lease(redis_client, worker_id, LEASE_TTL)
+    hb_thread = threading.Thread(
+        target=_heartbeat_loop, args=(worker_id, finished, stop_requested),
+        daemon=True)
+    hb_thread.start()
 
     try:
-        retry_key = find_retryable_failed_key()
-        if retry_key:
-            print("INFO: Found retryable failed job:", retry_key)
-            process_failed_key(retry_key)
-            print("INFO: Retried job processed; exiting")
-            return 0
-
-        item = redis_client.blpop(QUEUE_KEY, timeout=BRPOP_TIMEOUT)
-        if item:
-            raw = item[1]
-            print("INFO: Pulled job from queue")
-            handle_job(raw)
-            print("INFO: Job from queue processed; exiting")
-            return 0
-
-    except redis.RedisError as e:
-        print("ERROR: Redis error while acquiring job: ", str(e))
-        return 1
+        return run_once(worker_id, stop_requested)
     except Exception as e:
-        print("ERROR: Unexpected error in worker: ", str(e))
+        print("ERROR: Unexpected error in worker:", e)
         return 1
+    finally:
+        finished.set()
+        jobs.release_lease(redis_client, worker_id)
+        hb_thread.join(timeout=2)
 
-    print("INFO: No job found in queue or retryable failed jobs; exiting")
-    return 0
 
 if __name__ == "__main__":
     try:
         sys.exit(main())
     except KeyboardInterrupt:
-        # Suppress full traceback on Ctrl-C; print concise message and exit
         print("INFO: KeyboardInterrupt received — shutting down worker gracefully")
         sys.exit(0)
-    except Exception:
-        sys.exit(0)
-

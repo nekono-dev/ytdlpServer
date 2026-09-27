@@ -50,7 +50,15 @@ def with_youtube_defaults(options: list[str]) -> list[str]:
 
     return result
 
-def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
+def run_yt_dlp(
+        job: dict[str, Any],
+        on_process_start: Any = None) -> tuple[bool, str]:
+    """yt-dlp を実行する。
+
+    `on_process_start` が渡されれば、起動した `subprocess.Popen` を渡して呼ぶ。
+    停止の指示 (SIGTERM 等) を子プロセスへ転送するために、呼び出し側 (main.py) が
+    そのプロセスへ signal を送れるようにする。
+    """
     url = job.get("url")
     options = job.get("options") or []
     savedir = job.get("savedir") or ""
@@ -86,14 +94,18 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
                 "-o", outtmpl, "--no-playlist", url,
             ]
             print("INFO: Running yt-dlp:", " ".join(cookies.mask_command(cmd)))
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            proc = subprocess.Popen(  # noqa: S603
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if on_process_start is not None:
+                on_process_start(proc)
+            stdout, stderr = proc.communicate()
+        if proc.returncode != 0:
+            print("ERROR: yt-dlp failed (rc=", proc.returncode, "):", stderr)
+            return False, stderr or stdout or f"yt-dlp exited with {proc.returncode}"
         print("INFO: yt-dlp succeeded for:", url)
     except cookies.ProfileNotFoundError as e:
         print("ERROR:", e)
         return False, str(e)
-    except subprocess.CalledProcessError as e:
-        print("ERROR: yt-dlp failed (rc=", e.returncode, "):", e.stderr)
-        return False, e.stderr or e.stdout or str(e)
     except FileNotFoundError:
         msg = "yt-dlp not found in PATH"
         print("ERROR:", msg)
@@ -103,4 +115,4 @@ def run_yt_dlp(job: dict[str, Any]) -> tuple[bool, str]:
         return False, str(e)
 
     # 旧二段階方式（tmp -> copy）は無効化。実行成功をそのまま成功として返す。
-    return True, proc.stdout
+    return True, stdout

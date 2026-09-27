@@ -3,7 +3,7 @@
 #
 # 使い方 (root):
 #   wget -qO- <URL>/install-alpine.sh | sh
-#   WORKER_COUNT=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
+#   WORKER_MAX=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
 #
 # 何度実行しても同じ結果になる (冪等)。設定は環境変数で上書きでき、
 # /etc/conf.d/ytdlpserver に保存される。再実行時は保存済みの値を引き継ぐ。
@@ -30,12 +30,21 @@ usage() {
   INSTALL_DIR       /opt/ytdlpserver
   DOWNLOAD_DIR      /mnt          動画の保存先
   COOKIE_DIR        $INSTALL_DIR/cookies  cookie プロファイルの保存先 (ログインセッション)
-  WORKER_COUNT      1             worker の数
+  WORKER_MAX        1             同時に動く worker の最大数 (旧 WORKER_COUNT を別名として引き継ぐ)
   API_PORT          5000
   POT_PORT          4416          PO Token プロバイダ (127.0.0.1 限定)
-  SERVER_TTL        24            api の定期再起動間隔 (時間)
   REDIS_TTL         604800
   RETRY_COUNT       5
+  YTDLP_REPO        yt-dlp/yt-dlp 取得元 (GitHub Releases)
+  UPDATE_INTERVAL   21600         yt-dlp の新版の確認間隔 (秒)
+  UPDATE_RETRY_INTERVAL 1800      確認・適用に失敗した後の再確認の間隔 (秒)
+  UPDATE_COOLDOWN   1800          probe 失敗による確認依頼の最短間隔 (秒)
+  KEEP_VERSIONS     2             導入先に残す yt-dlp の版数
+  DISPATCH_SCAN_INTERVAL 30       dispatcher がジョブを定期確認する間隔 (秒)
+  LEASE_TTL         60            worker の生存確認 (リース) の有効期間 (秒)
+  HEARTBEAT_INTERVAL 10           worker がリースを更新する間隔 (秒)
+  STOP_GRACE        20            停止指示から yt-dlp を強制終了するまでの猶予 (秒)
+  INPROGRESS_STALE  21600         所有者不明の in_progress を回収するまでの時間 (秒)
 
 オプション (1 で有効):
   WITH_NGINX        1 で nginx (443, 自己署名証明書) を導入
@@ -76,8 +85,10 @@ die() {
 
 # ---- 設定の読み込み (環境変数 > 保存済み > 既定値) ---------------------------
 # 環境変数の指定を退避してから保存済みの設定を読み、指定があれば上書きする
-_ENV_KEYS="REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR COOKIE_DIR WORKER_COUNT API_PORT POT_PORT \
-SERVER_TTL REDIS_TTL RETRY_COUNT WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
+_ENV_KEYS="REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR COOKIE_DIR WORKER_COUNT WORKER_MAX API_PORT POT_PORT \
+REDIS_TTL RETRY_COUNT YTDLP_REPO UPDATE_INTERVAL UPDATE_RETRY_INTERVAL UPDATE_COOLDOWN \
+KEEP_VERSIONS DISPATCH_SCAN_INTERVAL LEASE_TTL HEARTBEAT_INTERVAL STOP_GRACE INPROGRESS_STALE \
+WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
 WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION RI_BUILD_STORAGE REDIS_UI_HOST"
 _saved=""
 for _k in $_ENV_KEYS; do
@@ -97,12 +108,24 @@ REPO_REF="${REPO_REF:-$REPO_REF_DEFAULT}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/ytdlpserver}"
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-/mnt}"
 COOKIE_DIR="${COOKIE_DIR:-$INSTALL_DIR/cookies}"
-WORKER_COUNT="${WORKER_COUNT:-1}"
+# WORKER_COUNT は旧設定 (~v1.2 以前) の名残。WORKER_MAX が未指定なら、
+# 保存済みの WORKER_COUNT (あれば) を引き継ぐ。新規インストールは WORKER_MAX を使う。
+WORKER_MAX="${WORKER_MAX:-${WORKER_COUNT:-1}}"
+unset WORKER_COUNT
 API_PORT="${API_PORT:-5000}"
 POT_PORT="${POT_PORT:-4416}"
-SERVER_TTL="${SERVER_TTL:-24}"
 REDIS_TTL="${REDIS_TTL:-604800}"
 RETRY_COUNT="${RETRY_COUNT:-5}"
+YTDLP_REPO="${YTDLP_REPO:-yt-dlp/yt-dlp}"
+UPDATE_INTERVAL="${UPDATE_INTERVAL:-21600}"
+UPDATE_RETRY_INTERVAL="${UPDATE_RETRY_INTERVAL:-1800}"
+UPDATE_COOLDOWN="${UPDATE_COOLDOWN:-1800}"
+KEEP_VERSIONS="${KEEP_VERSIONS:-2}"
+DISPATCH_SCAN_INTERVAL="${DISPATCH_SCAN_INTERVAL:-30}"
+LEASE_TTL="${LEASE_TTL:-60}"
+HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-10}"
+STOP_GRACE="${STOP_GRACE:-20}"
+INPROGRESS_STALE="${INPROGRESS_STALE:-21600}"
 WITH_NGINX="${WITH_NGINX:-0}"
 SSL_CN="${SSL_CN:-localhost}"
 WITH_CLOUDFLARED="${WITH_CLOUDFLARED:-0}"
@@ -114,13 +137,19 @@ RI_BUILD_STORAGE="${RI_BUILD_STORAGE:-auto}"
 REDIS_UI_HOST="${REDIS_UI_HOST:-0.0.0.0}"
 
 # 数値の検証
-for _k in WORKER_COUNT API_PORT POT_PORT SERVER_TTL REDIS_TTL RETRY_COUNT; do
+for _k in WORKER_MAX API_PORT POT_PORT REDIS_TTL RETRY_COUNT UPDATE_INTERVAL \
+	UPDATE_RETRY_INTERVAL UPDATE_COOLDOWN KEEP_VERSIONS DISPATCH_SCAN_INTERVAL \
+	LEASE_TTL HEARTBEAT_INTERVAL STOP_GRACE INPROGRESS_STALE; do
 	eval "_v=\$$_k"
 	case "$_v" in
 	'' | *[!0-9]*) die "$_k は数値で指定してください: $_v" ;;
 	esac
 done
-[ "$WORKER_COUNT" -ge 1 ] || die "WORKER_COUNT は 1 以上にしてください"
+[ "$WORKER_MAX" -ge 1 ] || die "WORKER_MAX は 1 以上にしてください"
+case "$YTDLP_REPO" in
+*/*) ;;
+*) die "YTDLP_REPO は <所有者>/<リポジトリ> の形式で指定してください: $YTDLP_REPO" ;;
+esac
 case "$REDIS_UI" in
 insight | commander) ;;
 *) die "REDIS_UI は insight か commander を指定してください: $REDIS_UI" ;;
@@ -142,6 +171,8 @@ POT_DIR="$INSTALL_DIR/pot-provider"
 BIN_DIR="$INSTALL_DIR/bin"
 RI_DIR="$INSTALL_DIR/redisinsight"
 RI_DATA_DIR="/var/lib/redisinsight"
+YTDLP_DIR="$INSTALL_DIR/ytdlp"
+PLUGIN_DIR="/etc/yt-dlp/plugins"
 
 # ---- 設定ファイルの保存 -----------------------------------------------------
 # 値はシングルクォートで囲み、sh から . で読み込める形にする
@@ -152,8 +183,10 @@ write_conf() {
 	umask 077
 	{
 		echo "# ytdlpserver の設定 (install-alpine.sh が生成)。編集後は再起動すること。"
-		for _k in REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR COOKIE_DIR WORKER_COUNT API_PORT POT_PORT \
-			SERVER_TTL REDIS_TTL RETRY_COUNT WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
+		for _k in REPO_URL REPO_REF INSTALL_DIR DOWNLOAD_DIR COOKIE_DIR WORKER_MAX API_PORT POT_PORT \
+			REDIS_TTL RETRY_COUNT YTDLP_REPO UPDATE_INTERVAL UPDATE_RETRY_INTERVAL UPDATE_COOLDOWN \
+			KEEP_VERSIONS DISPATCH_SCAN_INTERVAL LEASE_TTL HEARTBEAT_INTERVAL STOP_GRACE INPROGRESS_STALE \
+			WITH_NGINX SSL_CN WITH_CLOUDFLARED CLOUDFLARE_TOKEN \
 			WITH_REDIS_INSIGHT REDIS_UI REDIS_INSIGHT_VERSION RI_BUILD_STORAGE REDIS_UI_HOST; do
 			eval "_v=\$$_k"
 			echo "$_k=$(q "$_v")"
@@ -208,6 +241,32 @@ setup_python() {
 		"$SRC_DIR/workerServer/yt-dlp.conf" >/etc/yt-dlp.conf
 }
 
+# ---- yt-dlp プラグイン (bgutil) -------------------------------------------
+# バイナリ版 yt-dlp が読む標準の置き場へ、venv に入れた bgutil-ytdlp-pot-provider の
+# yt_dlp_plugins を配置する (Docker イメージと同じ内容)。
+setup_plugins() {
+	log "yt-dlp プラグインを配置します"
+	_site="$("$VENV_DIR/bin/python3" -c \
+		"import sysconfig; print(sysconfig.get_paths()['purelib'])")"
+	[ -d "$_site/yt_dlp_plugins" ] || die "bgutil-ytdlp-pot-provider のプラグインが見つかりません"
+	mkdir -p "$PLUGIN_DIR/bgutil"
+	rm -rf "$PLUGIN_DIR/bgutil/yt_dlp_plugins"
+	cp -r "$_site/yt_dlp_plugins" "$PLUGIN_DIR/bgutil/"
+	if ! grep -q '^--plugin-dirs ' /etc/yt-dlp.conf 2>/dev/null; then
+		echo "--plugin-dirs $PLUGIN_DIR/bgutil" >>/etc/yt-dlp.conf
+	fi
+}
+
+# ---- yt-dlp の初期導入 -------------------------------------------------------
+# 導入先が空の場合のみ、GitHub Releases から初期の版を取得・検証する (冪等)。
+# 失敗した場合はインストールを失敗させる (取得元に到達できない環境では使えない)。
+setup_ytdlp() {
+	log "yt-dlp を導入します (導入先: $YTDLP_DIR)"
+	mkdir -p "$YTDLP_DIR"
+	YTDLP_DIR="$YTDLP_DIR" YTDLP_REPO="$YTDLP_REPO" \
+		"$VENV_DIR/bin/python3" "$SRC_DIR/workerServer/src/updater.py"
+}
+
 # ---- pot-provider -----------------------------------------------------------
 setup_pot_provider() {
 	log "pot-provider を構築します"
@@ -254,13 +313,8 @@ setup_redis() {
 # ---- OpenRC サービス --------------------------------------------------------
 write_wrappers() {
 	mkdir -p "$BIN_DIR"
-
-	# 起動時に yt-dlp を最新化する (entrypoint.sh と同じ。失敗しても継続)
-	cat >"$BIN_DIR/update-ytdlp" <<EOF
-#!/bin/sh
-"$VENV_DIR/bin/pip" install --upgrade --no-cache-dir "yt-dlp[default,curl-cffi]" >/dev/null 2>&1 || true
-echo "yt-dlp \$("$VENV_DIR/bin/pip" show yt-dlp | grep Version || true)"
-EOF
+	# 旧版 (~v1.2 以前) の名残。yt-dlp の更新は dispatcher が行うため不要になった
+	rm -f "$BIN_DIR/update-ytdlp" "$BIN_DIR/run-worker"
 
 	cat >"$BIN_DIR/run-pot" <<EOF
 #!/bin/sh
@@ -273,22 +327,23 @@ EOF
 	cat >"$BIN_DIR/run-api" <<EOF
 #!/bin/sh
 . "$CONF_FILE"
-# アプリは yt-dlp を PATH から呼ぶため venv の bin を先頭に追加する
-export PATH="$VENV_DIR/bin:\$PATH"
-export REDIS_URL="redis://127.0.0.1:6379" SERVER_TTL PORT="\$API_PORT" COOKIE_DIR
-"$BIN_DIR/update-ytdlp"
+# yt-dlp は導入先 (YTDLP_DIR/current) を PATH の先頭にして呼ぶ。
+# 更新は dispatcher が行うため、api 自身は yt-dlp を更新せず、定期再起動もしない。
+export PATH="$YTDLP_DIR/current:\$PATH"
+export REDIS_URL="redis://127.0.0.1:6379" PORT="\$API_PORT" COOKIE_DIR YTDLP_DIR="$YTDLP_DIR"
 cd "$SRC_DIR/apiServer/src"
-# SERVER_TTL 時間で停止させ、supervise-daemon の respawn で再起動する
-exec timeout "\$((SERVER_TTL * 3600))" "$VENV_DIR/bin/python3" -u main.py
+exec "$VENV_DIR/bin/python3" -u main.py
 EOF
 
-	cat >"$BIN_DIR/run-worker" <<EOF
+	cat >"$BIN_DIR/run-dispatcher" <<EOF
 #!/bin/sh
 . "$CONF_FILE"
-export PATH="$VENV_DIR/bin:\$PATH"
+export PATH="$YTDLP_DIR/current:\$PATH"
 export REDIS_URL="redis://127.0.0.1:6379" REDIS_TTL RETRY_COUNT DOWNLOAD_DIR COOKIE_DIR
-"$BIN_DIR/update-ytdlp"
-exec "$VENV_DIR/bin/python3" -u "$SRC_DIR/workerServer/src/main.py"
+export DISPATCH_MODE=process WORKER_MAX DISPATCH_SCAN_INTERVAL LEASE_TTL HEARTBEAT_INTERVAL \\
+	STOP_GRACE INPROGRESS_STALE UPDATE_INTERVAL UPDATE_RETRY_INTERVAL UPDATE_COOLDOWN \\
+	KEEP_VERSIONS YTDLP_REPO YTDLP_DIR="$YTDLP_DIR"
+exec "$VENV_DIR/bin/python3" -u "$SRC_DIR/workerServer/src/dispatcher.py"
 EOF
 	chmod 755 "$BIN_DIR"/*
 }
@@ -319,23 +374,18 @@ setup_services() {
 	write_initd ytdlp-pot "ytdlpServer PO Token provider" "$BIN_DIR/run-pot" ""
 	write_initd ytdlp-api "ytdlpServer API" "$BIN_DIR/run-api" "need redis
 	after ytdlp-pot"
-	write_initd ytdlp-worker "ytdlpServer worker" "$BIN_DIR/run-worker" "need redis
+	# dispatcher: ジョブがあるときだけ worker (子プロセス) を起動する常駐サービス。
+	# WORKER_MAX まで並列に起動する (worker 自体は OpenRC サービスとして登録しない)。
+	write_initd ytdlp-dispatcher "ytdlpServer dispatcher" "$BIN_DIR/run-dispatcher" "need redis
 	after ytdlp-pot"
 
-	# worker は ytdlp-worker.N のシンボリックリンクで複数台にする
-	for _f in /etc/init.d/ytdlp-worker.*; do
-		[ -L "$_f" ] || continue
-		_n="${_f##*.}"
-		if [ "$_n" -gt "$WORKER_COUNT" ]; then
-			rc-service "ytdlp-worker.$_n" stop >/dev/null 2>&1 || true
-			rc-update del "ytdlp-worker.$_n" default >/dev/null 2>&1 || true
-			rm -f "$_f"
-		fi
-	done
-	_i=1
-	while [ "$_i" -le "$WORKER_COUNT" ]; do
-		ln -sf ytdlp-worker "/etc/init.d/ytdlp-worker.$_i"
-		_i=$((_i + 1))
+	# 旧版 (~v1.2 以前) の worker サービス (複数台構成) を廃止する
+	for _f in /etc/init.d/ytdlp-worker /etc/init.d/ytdlp-worker.*; do
+		[ -e "$_f" ] || [ -L "$_f" ] || continue
+		_name="$(basename "$_f")"
+		rc-service "$_name" stop >/dev/null 2>&1 || true
+		rc-update del "$_name" default >/dev/null 2>&1 || true
+		rm -f "$_f"
 	done
 }
 
@@ -555,18 +605,15 @@ write_conf
 install_packages
 fetch_source
 setup_python
+setup_plugins
+setup_ytdlp
 setup_pot_provider
 setup_dirs
 setup_redis
 setup_services
 
-# 起動順: redis → pot-provider → api / worker
-enable_and_restart redis ytdlp-pot ytdlp-api
-_i=1
-while [ "$_i" -le "$WORKER_COUNT" ]; do
-	enable_and_restart "ytdlp-worker.$_i"
-	_i=$((_i + 1))
-done
+# 起動順: redis → pot-provider → api / dispatcher (worker は dispatcher が起動する)
+enable_and_restart redis ytdlp-pot ytdlp-api ytdlp-dispatcher
 
 [ "$WITH_NGINX" = "1" ] && setup_nginx
 [ "$WITH_CLOUDFLARED" = "1" ] && setup_cloudflared

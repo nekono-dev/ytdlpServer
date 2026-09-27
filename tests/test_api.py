@@ -24,14 +24,13 @@ class ApiTest(unittest.TestCase):
 
     def test_login_required_without_profile(self) -> None:
         err = self.c.LoginRequiredError("login required")
-        with mock.patch.object(self.m.function, "probe_and_build_jobs", side_effect=err), \
-                mock.patch("os._exit") as exit_:
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", side_effect=err):
             r = self.post()
-            time.sleep(0.7)
         self.assertEqual(r.status_code, 401)
         self.assertEqual(r.json["error"], "login_required")
         self.assertEqual(r.json["reason"], "cookie_missing")
-        exit_.assert_not_called()  # ログイン要求ではプロセスを再起動しない
+        # ログイン要求では、更新確認の依頼も送らない (サーバ不調ではないため)
+        self.assertEqual(self.redis.published, [])
 
     def test_login_required_marks_profile_expired(self) -> None:
         err = self.c.LoginRequiredError("login required")
@@ -131,14 +130,15 @@ class ApiTest(unittest.TestCase):
         self.assertEqual((r.status_code, r.json["reason"]), (401, "profile_unknown"))
         probe.assert_not_called()
 
-    def test_other_probe_failure_unchanged(self) -> None:
+    def test_other_probe_failure_requests_update_check_without_restart(self) -> None:
         with mock.patch.object(self.m.function, "probe_and_build_jobs",
                                side_effect=RuntimeError("boom")), \
                 mock.patch("os._exit") as exit_:
             r = self.post()
-            time.sleep(0.7)
         self.assertEqual(r.status_code, 400)
-        exit_.assert_called_once_with(1)
+        # プロセスは再起動せず、dispatcher へ更新確認を依頼するだけ
+        exit_.assert_not_called()
+        self.assertEqual(self.redis.published, [("ytdlp:events", "check_update")])
 
     def test_rejects_forbidden_options_and_bad_profile(self) -> None:
         for opts in ("-u a -p b", "--cookies /etc/passwd", "--netrc-cmd id"):
@@ -147,6 +147,36 @@ class ApiTest(unittest.TestCase):
             self.assertIn("not allowed", r.json["message"])
         self.assertEqual(self.post(auth_profile="../x").status_code, 400)
         self.assertEqual(self.post(auth_profile=5).status_code, 400)
+
+    def test_download_notifies_dispatcher(self) -> None:
+        job = {"id": "a", "url": "https://x/1", "options": []}
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", return_value=[job]):
+            r = self.post()
+        self.assertEqual(r.status_code, 200)
+        self.assertIn(("ytdlp:events", "queued"), self.redis.published)
+
+    def test_retry_resets_failed_count_and_notifies(self) -> None:
+        self.redis.hset("ytdlp:jobs:failed:a", mapping={"failed_count": "3"})
+        r = self.client.post("/download/retry")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json["count"], 1)
+        self.assertEqual(self.redis.hgetall("ytdlp:jobs:failed:a")["failed_count"], "0")
+        self.assertIn(("ytdlp:events", "queued"), self.redis.published)
+
+    def test_retry_does_not_resurrect_key_taken_by_worker(self) -> None:
+        # scan で見つけた直後に、worker が in_progress へ RENAME した状況を模す
+        self.redis.hset("ytdlp:jobs:failed:b", mapping={"failed_count": "2"})
+        real_hset = self.redis.hset
+
+        def racing_hset(key: str, *a: object, **kw: object) -> int:
+            if key == "ytdlp:jobs:failed:b":
+                self.redis.hashes.pop(key, None)
+            return real_hset(key, *a, **kw)
+
+        with mock.patch.object(self.redis, "hset", side_effect=racing_hset):
+            r = self.client.post("/download/retry")
+        self.assertEqual(r.json["count"], 0)
+        self.assertNotIn("ytdlp:jobs:failed:b", self.redis.hashes)
 
     def test_profile_passed_to_job_and_queue(self) -> None:
         job = {"id": "a", "url": "https://x/1", "options": [], "auth_profile": "nico"}

@@ -85,10 +85,10 @@ docker-compose --version
 
 ### 2. 保存先を設定する
 
-`<ファイル>` の worker の `volumes` を編集する（`<ホスト側>:<コンテナ側>`）。
+`<ファイル>` の `dispatcher` の `volumes` を編集する（`<ホスト側>:<コンテナ側>`）。worker は、ジョブがあるときだけ dispatcher が起動する（常駐しない）ため、`worker` サービス自体は無い。
 
 ```yml
-worker:
+dispatcher:
   volumes:
     - /mnt/video:/download
 ```
@@ -96,10 +96,14 @@ worker:
 ### 3. 起動する
 
 ```sh
-docker-compose -f <ファイル> up -d --build --scale worker=4
+docker-compose -f <ファイル> up -d --build
 ```
 
-`--scale worker=N` で worker の数を指定する。
+同時に動く worker の最大数は `WORKER_MAX`（既定 1）で指定する。
+
+```sh
+WORKER_MAX=4 docker-compose -f <ファイル> up -d --build
+```
 
 ### 4. 動作確認する
 
@@ -124,10 +128,10 @@ docker-compose -f <ファイル> logs -f
 
 ## 更新する
 git pull
-docker-compose -f <ファイル> up -d --build --scale worker=4
+docker-compose -f <ファイル> up -d --build
 
-## worker の数を変える
-docker-compose -f <ファイル> up -d --scale worker=8
+## worker の最大数を変える
+WORKER_MAX=8 docker-compose -f <ファイル> up -d
 
 ## 再起動する
 docker-compose -f <ファイル> restart
@@ -176,7 +180,7 @@ wget -O install-alpine.sh https://github.com/nekono-dev/ytdlpServer/releases/lat
 環境変数に設定値を指定して実行する。指定した値は `/etc/conf.d/ytdlpserver` に保存される。
 
 ```sh
-WORKER_COUNT=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
+WORKER_MAX=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
 ```
 
 初回は数分かかる。完了すると API の URL が表示される。
@@ -186,12 +190,21 @@ WORKER_COUNT=4 DOWNLOAD_DIR=/mnt/video sh install-alpine.sh
 | 環境変数              | 既定値             | 内容                                                                               |
 | --------------------- | ------------------ | ---------------------------------------------------------------------------------- |
 | DOWNLOAD_DIR          | `/mnt`             | 動画の保存先                                                                       |
-| WORKER_COUNT          | `1`                | worker の数                                                                        |
+| WORKER_MAX            | `1`                | 同時に動く worker の最大数（旧 `WORKER_COUNT` を別名として引き継ぐ）               |
 | API_PORT              | `5000`             | API のポート                                                                       |
 | POT_PORT              | `4416`             | PO Token プロバイダのポート（127.0.0.1 限定）                                      |
-| SERVER_TTL            | `24`               | API を自動で再起動する間隔（時間）                                                 |
 | REDIS_TTL             | `604800`           | redis のジョブ情報の保持期間（秒）                                                 |
 | RETRY_COUNT           | `5`                | ダウンロードのリトライ回数                                                         |
+| YTDLP_REPO            | `yt-dlp/yt-dlp`    | yt-dlp の取得元（GitHub リポジトリ）                                               |
+| UPDATE_INTERVAL       | `21600`            | yt-dlp の新版の確認間隔（秒）                                                      |
+| UPDATE_RETRY_INTERVAL | `1800`             | 確認・適用に失敗した後の再確認の間隔（秒）                                         |
+| UPDATE_COOLDOWN       | `1800`             | probe 失敗による確認依頼の最短間隔（秒）                                           |
+| KEEP_VERSIONS         | `2`                | 導入先に残す yt-dlp の版数                                                         |
+| DISPATCH_SCAN_INTERVAL| `30`               | dispatcher がジョブを定期確認する間隔（秒）                                        |
+| LEASE_TTL             | `60`               | worker の生存確認（リース）の有効期間（秒）                                        |
+| HEARTBEAT_INTERVAL    | `10`               | worker がリースを更新する間隔（秒）                                                |
+| STOP_GRACE            | `20`               | 停止指示から yt-dlp を強制終了するまでの猶予（秒）                                 |
+| INPROGRESS_STALE      | `21600`            | 所有者不明の in_progress ジョブを回収するまでの時間（秒）                          |
 | INSTALL_DIR           | `/opt/ytdlpserver` | ソースの配置先                                                                     |
 | REPO_URL / REPO_REF   | Release 埋め込み値 | 取得元リポジトリとブランチ・タグ                                                   |
 | WITH_NGINX            | `0`                | `1` で HTTPS（nginx）を有効化。[詳細](#httpsnginx)                                 |
@@ -260,7 +273,7 @@ wget -S -O /dev/null http://127.0.0.1:5000/download
 
 ```sh
 ## 設定を変更する（変更する項目だけ指定する。指定しない項目は前回の値のまま）
-WORKER_COUNT=8 sh install-alpine.sh
+WORKER_MAX=8 sh install-alpine.sh
 
 ## 設定値の更新は /etc/conf.d/ytdlpserver の編集 + スクリプトの再実行でも対応可能
 vi /etc/conf.d/ytdlpserver
@@ -274,10 +287,10 @@ tail -f /var/log/ytdlp-api.log
 
 ## 再起動する
 rc-service ytdlp-api restart
-rc-service ytdlp-worker.1 restart
+rc-service ytdlp-dispatcher restart
 ```
 
-サービス名: `ytdlp-pot` / `ytdlp-api` / `ytdlp-worker.<番号>` / `redis` / `nginx` / `ytdlp-cloudflared` / `ytdlp-redis-ui`
+サービス名: `ytdlp-pot` / `ytdlp-api` / `ytdlp-dispatcher`（worker はここから起動される） / `redis` / `nginx` / `ytdlp-cloudflared` / `ytdlp-redis-ui`
 
 追加した機能を止める場合は、サービスを停止して無効にする。
 
@@ -454,21 +467,19 @@ docker compose up -d --build browser
 - `TZ` が UTC のままだと、`browser` のログに `WARNING: TZ is UTC` が出る。
 - 制限された直後は、設定を直しても、しばらく同じ表示になることがある。試行を繰り返さず、時間をあけて試す。
 
-### `yt-dlp probe failed; wait restart yt-dlp.` が返る
+### `yt-dlp probe failed; requested a yt-dlp update check.` が返る
 
-しばらく待って、もう一度リクエストする。繰り返す場合は URL と `options` を確認する。
+yt-dlp が対応していない URL・動画である可能性がある。しばらく待って、もう一度リクエストする（dispatcher が新版の確認を行う。新版があれば自動で切り替わる）。繰り返す場合は URL と `options` を確認する。
 
 ### `この動画はご覧いただけません` になる（YouTube）
 
-API と worker を再起動して、もう一度リクエストする。
+もう一度リクエストする（yt-dlp の新版が自動で使われる）。改善しない場合は pot-provider を再起動する。
 
 ```sh
 ## Docker Compose
-docker-compose -f <ファイル> restart
+docker-compose -f <ファイル> restart pot-provider
 ## Alpine
 rc-service ytdlp-pot restart
-rc-service ytdlp-api restart
-rc-service ytdlp-worker.1 restart
 ```
 
 ### `client and server have different API versions`（Docker Compose）

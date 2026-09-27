@@ -1,10 +1,9 @@
 #!/bin/sh
-
-## update yt-dlp before starting the server
-pip3 install --upgrade --break-system-packages --root-user-action ignore yt-dlp[default,curl-cffi] > /dev/null 2>&1
-## show installed version
-echo "yt-dlp $(pip3 show yt-dlp | grep Version)"
-
-echo "INFO: yt-dlp updated to latest version."
-## start the server (use exec so PID 1 is the python process and signals are forwarded)
-exec python3 -u /workspace/main.py
+# 既定 (引数無し) は dispatcher を起動する。
+# dispatcher が worker コンテナを作るときは、command で `python3 -u /workspace/main.py`
+# を明示的に渡す (この場合はそちらを実行する)。
+# yt-dlp の更新は dispatcher が行う。ここでは pip install は行わない。
+if [ "$#" -gt 0 ]; then
+	exec "$@"
+fi
+exec python3 -u /workspace/dispatcher.py

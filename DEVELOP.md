@@ -24,26 +24,34 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 
 ```text
 クライアント ─POST /download─▶ API サーバ ─(yt-dlp -j で解析)─▶ Redis(ytdlp:queue)
-                                                                     │ BLPOP
+                                                                     │ PUBLISH ytdlp:events
                                                                      ▼
-                                                            Worker(yt-dlp 実行)─▶ 保存先
+                                                            dispatcher(常駐・軽量)
+                                                                     │ 対象があるときだけ起動
+                                                                     ▼
+                                                            Worker(yt-dlp 実行・1 件で終了)─▶ 保存先
                                   ┌─ pot-provider (PO Token) ◀─ API / Worker から参照
+                                  └─ GitHub Releases ◀─ dispatcher が yt-dlp の新版を定期確認
 ```
 
 | コンポーネント | 役割                                                                                     |
 | -------------- | ---------------------------------------------------------------------------------------- |
-| API サーバ     | リクエストを検証し、`yt-dlp -j --flat-playlist` で解析してジョブに分解し、キューへ積む。 |
-| Redis          | ジョブキューとジョブ状態の保管。                                                         |
-| Worker         | キューから 1 件取得して yt-dlp を実行する。並列化はコンテナ（プロセス）の数で行う。      |
+| API サーバ     | リクエストを検証し、`yt-dlp -j --flat-playlist` で解析してジョブに分解し、キューへ積む。yt-dlp は更新しない（再起動もしない）。 |
+| Redis          | ジョブキューとジョブ状態の保管。dispatcher・worker 間の通知（Pub/Sub）も兼ねる。          |
+| dispatcher     | 常駐。ジョブがある間だけ worker を起動する（[workerServer/src/dispatcher.py](workerServer/src/dispatcher.py)）。yt-dlp の新版を定期的に確認・適用する（[workerServer/src/updater.py](workerServer/src/updater.py)）。 |
+| Worker         | キューから 1 件取得して yt-dlp を実行し、終了する。並列化は dispatcher が起動する数（`WORKER_MAX`）で行う。 |
 | pot-provider   | YouTube 用の PO Token を発行する（bgutil）。API / Worker の yt-dlp が参照する。          |
+| docker-socket-proxy | （Compose のみ）dispatcher が worker コンテナを作るための、権限を絞った Docker API 代理。 |
 | Redis Insight  | Redis の閲覧用 Web UI（任意）。                                                          |
+
+イベント駆動の設計は [specs/design.md](specs/design.md)・[specs/workerServer/design.md](specs/workerServer/design.md) を参照。
 
 ## ディレクトリ構成
 
 | パス                                                                       | 内容                                                              |
 | -------------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | [apiServer/](apiServer/)                                                   | API サーバ（Flask + waitress）。`src/main.py`（ルーティング）、`src/function.py`（yt-dlp 解析・ジョブ生成） |
-| [workerServer/](workerServer/)                                             | Worker。`src/main.py`（キュー処理・状態遷移）、`src/function.py`（yt-dlp 実行） |
+| [workerServer/](workerServer/)                                             | Worker と dispatcher（同一イメージ）。`src/main.py`（worker。取得・実行・状態遷移）、`src/dispatcher.py`（起動判断）、`src/updater.py`（yt-dlp の更新）、`src/jobs.py`（状態遷移・回収の共有処理）、`src/backends.py`（worker の起動先。プロセス/Docker）、`src/function.py`（yt-dlp 実行） |
 | `*/src/cookies.py`・`*/src/presets.json`                                   | cookie プロファイルの共通処理と、プリセットの定義（API・Worker・browserServer で**同一内容**。一部だけ直さない） |
 | [browserServer/](browserServer/)                                           | ログイン用ブラウザ（Chromium、画面は CDP で配信）と cookie 回収。`src/main.py`（操作画面・制御 API・WebSocket、aiohttp）、`src/session.py`（状態管理）、`src/browser.py`（ブラウザ制御・画面配信・入力）、`src/netscape.py`（cookie の絞り込み・変換） |
 | [tests/](tests/)                                                           | 単体テスト（標準 `unittest`）                                     |
@@ -66,8 +74,9 @@ pyenv virtualenv 3.12.11 ytdlpServer
 pip install -r apiServer/requirements.txt -r workerServer/requirements.txt
 ```
 
-ローカル実行時は、`yt-dlp` が PATH から呼べること、Worker では加えて `ffmpeg` が必要なこと、
-YouTube の JS チャレンジ(EJS)のために `node` が必要なことに注意する。
+`requirements.txt` に yt-dlp 自体は含まない（本番はバイナリを別途導入する。[コンテナイメージ](#コンテナイメージ)参照）。
+ローカル実行時は、`pip install yt-dlp` 等で別途 `yt-dlp` を PATH から呼べるようにすること、
+Worker では加えて `ffmpeg` が必要なこと、YouTube の JS チャレンジ(EJS)のために `node` が必要なことに注意する。
 
 ### Redis
 
@@ -97,10 +106,12 @@ pot-provider を含めて一括で起動できる。
 
 ```sh
 docker compose up -d --build
-docker compose logs -f api worker
+docker compose logs -f api dispatcher
 ```
 
-ソースを変更したら `docker compose up -d --build api worker` で再ビルドする。
+ソースを変更したら `docker compose up -d --build api dispatcher` で再ビルドする。
+worker は dispatcher がジョブに応じて起動・終了するため、compose の個別サービスとしては存在しない
+（`docker compose ps` には、動いている間だけ `ytdlp.role=worker` ラベル付きのコンテナとして現れる）。
 
 ### コンテナを個別に起動する
 
@@ -123,34 +134,39 @@ docker run --rm --name ytdlp-api --network ytdlp-dev -p 5000:5000 -e DEBUG=true 
 ```
 
 ```log
-Requirement already satisfied: yt-dlp in /usr/lib/python3.12/site-packages (2025.12.8)
-INFO: yt-dlp updated to latest version.
 INFO: Connected to Redis at redis://192.168.3.151:6379
 INFO: Start ytdlpServer port: 5000
 ```
 
-- 起動時に yt-dlp を最新版へ更新する（[apiServer/entrypoint.sh](apiServer/entrypoint.sh)）。
-- `SERVER_TTL`（時間、既定 24）が経過すると API プロセスを停止する。コンテナは `restart: always`
-  （Alpine 版は supervise-daemon の respawn）で再起動され、そのたびに yt-dlp が更新される。
-- yt-dlp の解析（probe）に失敗した場合も、API は 400 を返した後にプロセスを終了して再起動させる（yt-dlp の更新を促すため）。
+- yt-dlp は更新しない（更新は dispatcher が一括で行う）。定期再起動（旧 `SERVER_TTL`）も行わない。
+- yt-dlp の解析（probe）に失敗した場合は、400 を返し、dispatcher へ新版の確認を依頼する（`check_update` 通知。プロセスは再起動しない）。
 - `DEBUG` に空でない値を設定すると、Redis に接続できなくても起動し、リクエストやジョブの内容をログ出力する。
   ただし Redis が無いとジョブは積めない。
 
-#### Worker Server
+#### Worker / dispatcher（workerServer、同一イメージ）
 
 ```sh
 # build
-docker build ./workerServer -t ytdlpserver-worker
+docker build -f workerServer/Dockerfile -t ytdlpserver-worker .   # ビルドコンテキストはリポジトリ直下
 
-# Run debug mode with redis
-docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download -e REDIS_URL=redis://redis-ytdlp:6379 ytdlpserver-worker:latest
+# dispatcher を起動 (既定のコマンド)
+docker run -d --name ytdlp-dispatcher --network ytdlp-dev \
+  -v /mnt/video:/download -e REDIS_URL=redis://redis-ytdlp:6379 \
+  -e DISPATCH_MODE=process ytdlpserver-worker:latest
+
+# worker 単体を試す (dispatcher を経由せず、1 件処理して終了する)
+docker run --rm --name ytdlp-worker --network ytdlp-dev \
+  -v /mnt/video:/download -e REDIS_URL=redis://redis-ytdlp:6379 \
+  ytdlpserver-worker:latest python3 -u /workspace/main.py
 ```
 
-- **Worker は 1 件処理すると終了する**（[workerServer/src/main.py](workerServer/src/main.py) の `main()`）。
-  再実行可能な失敗ジョブがあればそれを優先し、なければキューを最大 `BRPOP_TIMEOUT` 秒待つ。
-  常駐させるには `restart: always`（compose）や `--restart` などで再起動させる。上記の `docker run --rm` は 1 件で終わる。
-- 並列処理は実装していない。Worker の数を増やして対応する（`docker compose up -d --scale worker=N`）。
-- 起動時に Redis へ接続できないと即終了する。
+- **dispatcher は常駐し、ジョブ（キュー・自動リトライ対象）があるときだけ worker を起動する。**
+  worker 自体は 1 件処理すると終了する（[workerServer/src/main.py](workerServer/src/main.py)）。
+- `DISPATCH_MODE=docker`（既定は Compose の設定）では、docker-socket-proxy 経由で worker コンテナを作る。
+  ローカルの単発検証では `DISPATCH_MODE=process`（dispatcher の子プロセスとして worker を起動）が簡単。
+- 並列度は `WORKER_MAX`（既定 1）。dispatcher 自身が同時に動く worker の数を管理する。
+- yt-dlp は dispatcher だけが更新する。導入先は `YTDLP_DIR`（既定 `/opt/ytdlp`）。
+- 起動時に Redis へ接続できないと即終了する（dispatcher・worker とも）。
 
 ## 環境変数
 
@@ -161,7 +177,7 @@ docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download 
 | REDIS_URL   | `redis://localhost:6379` | Redis の接続先                                    |
 | PORT        | `5000`                   | 待ち受けポート（`0.0.0.0`）                       |
 | DEBUG       | 未設定                   | 空でない値でデバッグモード                        |
-| SERVER_TTL  | `24`                     | 定期再起動の間隔（時間）。数値以外は 24 になる    |
+| YTDLP_DIR   | `/opt/ytdlp`             | yt-dlp の導入先（dispatcher が更新する。`current` を `PATH` の先頭に置いて参照する） |
 | COOKIE_DIR  | `/cookies`               | cookie プロファイルの置き場所（Worker と共有する） |
 | BROWSER_UI_URL | 未設定                | ログイン要求の応答に載せる `login_url` の基準 URL |
 
@@ -222,7 +238,7 @@ docker run --rm --name ytdlp-worker --network ytdlp-dev -v /mnt/video:/download 
 | パラメータ不正               | 400        | `Invalid request.`（禁止オプション・不正な `auth_profile` は理由を返す） |
 | ログインが必要               | 401        | `error=login_required`、`reason`（`cookie_missing` / `profile_unknown` / `cookie_expired`）、`auth_profile`、日本語の `message`、`login_url` を返す。プロセスは再起動しない |
 | namefield が不正             | 400        | namefield のエラー内容                         |
-| yt-dlp の解析失敗            | 400        | `yt-dlp probe failed; wait restart yt-dlp.`（その後プロセスを終了して再起動） |
+| yt-dlp の解析失敗            | 400        | `yt-dlp probe failed; requested a yt-dlp update check.`（プロセスは再起動しない。dispatcher へ新版の確認を依頼する） |
 | 内部エラー                   | 500        | `Internal server error.`                       |
 
 ### リクエスト例
@@ -248,7 +264,9 @@ curl -X POST http://localhost:5000/download/retry
 
 ### ジョブキュー（`ytdlp:queue`）
 
-List。API が `RPUSH`、Worker が `BLPOP` する。要素は次の JSON。
+List。API が `RPUSH` する。要素は次の JSON。worker は `LMOVE` で 1 件を取り出す
+（`ytdlp:processing:<worker_id>` へ一時的に移してから、`ytdlp:jobs:in_progress:<id>` の記録を作る。
+[ライフサイクル](specs/workerServer/design.md) を参照）。
 
 | 項目     | 内容                                                                    |
 | -------- | ----------------------------------------------------------------------- |
@@ -268,23 +286,35 @@ List。`/schedule` が保存した `url` / `options` / `savedir` / `namefield` /
 
 ### ジョブ状態（`ytdlp:jobs:<status>:<job_id>`）
 
-Hash。`status` がキー名に入るため、状態が変わると **キーごと作り直す**（新キーへ書き込み、旧キーを削除）。
-遷移は `pending` → `in_progress` → `completed` / `failed`。いずれも `REDIS_TTL` で期限切れになる。
+Hash。`status` がキー名に入るため、状態が変わると **キーごと作り直す**（`RENAME`、または新キーへ書き込み・旧キーを削除）。
+遷移は `in_progress` → `completed` / `failed`（取得と同時に `in_progress` の記録を作るため、`pending` は経由しない）。
+いずれも `REDIS_TTL` で期限切れになる。
 
 | フィールド   | 内容                                            |
 | ------------ | ----------------------------------------------- |
-| status       | `pending` / `in_progress` / `completed` / `failed` |
+| status       | `in_progress` / `completed` / `failed`          |
 | url / options / savedir / filename | ジョブの内容（options は JSON 文字列） |
 | created_at   | 作成時刻（UNIX 秒）                             |
 | started_at / completed_at / failed_at | 各時刻                      |
+| worker_id    | 実行中の worker（ホスト名・PID・起動時刻から生成）。生存確認は `ytdlp:workers:<worker_id>`（TTL 付き文字列）で行う |
 | output       | 成功時の yt-dlp の標準出力                      |
 | error        | 失敗時のエラー内容                              |
 | failed_count | 失敗回数。`RETRY_COUNT` に達すると自動リトライされない |
 | auth_profile | cookie プロファイル名（未指定は空）             |
-| error_code   | ログイン要求で失敗したとき `login_required`。それ以外の失敗では空 |
+| error_code   | ログイン要求で失敗したとき `login_required`。停止指示・異常終了による中断は `interrupted`。それ以外の失敗では空 |
 | login_url    | `BROWSER_UI_URL` があるときの再ログイン先       |
 
-同じ ID のジョブを重複して積むと、状態キーが上書きされる点に注意する。
+`error_code=interrupted` は、`failed_count` を消費しない場合（停止指示）と、消費する場合（dispatcher による異常終了の回収）がある。
+同じ ID のジョブを重複して積むと、状態キーが上書きされる点に注意する（実行中に別の投入が来ると、記録の所有者が入れ替わりうる）。
+
+### 通知チャンネル（`ytdlp:events`）
+
+Pub/Sub。API が `queued`（ジョブ投入・`/download/retry`）、`check_update`（probe 失敗）を発行する。
+dispatcher が購読し、内容は使わず「再評価せよ」の合図として扱う。取りこぼしは、dispatcher の定期スキャン（`DISPATCH_SCAN_INTERVAL`）が拾う。
+
+### yt-dlp の更新状態（`ytdlp:updater`）
+
+Hash。`checked_at`（前回の確認）、`current`（導入中の版）、`updated_at`、`last_error` を持つ。dispatcher が更新する。
 
 ### cookie プロファイルの状態（`ytdlp:auth:profile:<name>`）
 
@@ -315,7 +345,9 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 - 保存先は `DOWNLOAD_DIR/<savedir>/<filename>.%(ext)s` で、yt-dlp が最終位置へ直接出力する（一時ディレクトリ経由のコピーはしない）。
 - `savedir` / `filename` は Worker 側でも同じ規則で無害化する。
 - 失敗すると `failed_count` を加算して `failed` に移す。起動のたびに `failed_count < RETRY_COUNT` の失敗ジョブを探し、
-  あればキューより優先して再試行する。
+  あればキューより優先して再試行する（取得は `RENAMENX` で行い、複数 worker が同じジョブを取り合わない）。
+- 停止指示（SIGTERM/SIGINT）を受けたら yt-dlp を止め、`failed_count` を消費せず `interrupted` として記録する
+  （dispatcher の停止時、compose の worker コンテナの停止時も同様）。
 
 ### cookie によるログイン
 
@@ -326,7 +358,12 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 
 - どちらも `alpine:3.21` ベース。API のイメージには `nginx` も含まれるが、API のコードからは使っていない。
 - Worker は `ffmpeg` / `mutagen` を含む。
-- 起動時に `pip install --upgrade yt-dlp` を行うため、更新に失敗した場合は、イメージに含まれる版の yt-dlp のまま起動する（更新の成否はログに出ない）。
+- yt-dlp は pip ではなく GitHub Releases の musllinux バイナリを使う（採用理由は [specs/design.md](specs/design.md) の「yt-dlp の配布方式」）。
+  ビルド時に初期版を `/opt/ytdlp-image` へ同梱し、実行時は名前付きボリューム `ytdlp-bin`（`/opt/ytdlp`）を `PATH` の先頭で参照する
+  （`/opt/ytdlp-image` はボリュームが空・壊れているときのフォールバック）。更新は dispatcher が一括で行い、
+  api・worker は再起動なしに新版を使う。
+- bgutil の yt-dlp プラグインは `/etc/yt-dlp/plugins/bgutil`（標準の置き場）に配置する。バイナリ版 yt-dlp は
+  pip 環境の `yt_dlp_plugins` を自動検出しないため。
 
 ## Alpine インストーラ
 
@@ -335,7 +372,10 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 - 設定は環境変数で上書きでき、`/etc/conf.d/ytdlpserver` に保存される。再実行時は保存済みの値を引き継ぐ（優先順位: 環境変数 > 保存済み > 既定値）。
 - 環境変数の一覧は `sh scripts/install-alpine.sh --help` で確認できる。
 - ソースは `INSTALL_DIR`（既定 `/opt/ytdlpserver`）へ取得し、Python は venv（`--system-site-packages`）に入れる。
-- Redis / pot-provider / API / Worker は OpenRC サービスとして登録する。pot-provider と Redis は `127.0.0.1` に限定する。
+- yt-dlp は `YTDLP_DIR`（既定 `$INSTALL_DIR/ytdlp`）へ GitHub Releases から導入し、`current` を Redis と同様に更新する。
+  bgutil プラグインは `/etc/yt-dlp/plugins/bgutil` に配置する。
+- Redis / pot-provider / API / dispatcher は OpenRC サービスとして登録する。pot-provider と Redis は `127.0.0.1` に限定する。
+  worker は dispatcher の子プロセスとして起動される（OpenRC サービスとしては登録しない）。
 - 任意で nginx（HTTPS）、cloudflared、Redis の Web UI を導入する。
 
 ### Redis Insight のビルド
@@ -384,7 +424,9 @@ python3 -m unittest discover -s tests -v
 ```
 
 - `tests/test_cookies.py`: 共通処理（判定・禁止オプション・書き戻し・状態・プロファイルの定義と解決・履歴）。3 アプリの `cookies.py` と `presets.json` が同一であることも確認する。
-- `tests/test_api.py` / `tests/test_worker.py`: 401 応答、予約の保持、リトライ除外、ログの伏せ字など。
+- `tests/test_api.py`: 401 応答、予約の保持、リトライ除外、ログの伏せ字、通知（`queued`/`check_update`）の発行など。
+- `tests/test_worker.py`: yt-dlp 実行（Popen）、ジョブの取得・状態遷移・回収（`jobs.py`）、`run_once` の一連の流れ（完了・失敗・中断・所有権の喪失）。
+- `tests/test_dispatcher.py`: yt-dlp の更新判定（`updater.py`）、起動先（`backends.py`）、起動数の計算・バックオフ（`dispatcher.py`）。
 - `tests/test_browser.py`: cookie の絞り込み・変換、入力の CDP への変換、セッションの状態遷移（排他・タイムアウト・失敗時の破棄）、制御 API と WebSocket。Chromium と CDP は差し替える。
 
 ## Lint
@@ -398,7 +440,7 @@ ruff check apiServer/src workerServer/src browserServer/src
 ## 後片付け
 
 ```sh
-docker rm -f redis-ytdlp redisinsight ytdlp-api ytdlp-worker pot-provider
+docker rm -f redis-ytdlp redisinsight ytdlp-api ytdlp-dispatcher ytdlp-worker pot-provider
 docker network rm ytdlp-dev
 docker container prune
 ```
