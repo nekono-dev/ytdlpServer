@@ -12,6 +12,7 @@ import cookies
 INVALID_FS_CHARS = re.compile(r'[\\/¥:*?"<>|]')
 TEMPLATE_PATTERN = re.compile(r"%\(([^)]+)\)s")
 MAX_JOB_ID_BYTES = 200
+UNIQUE_SUFFIX_BYTES = 9  # "-" と UUID の先頭 8 桁
 
 # 子供向け動画などは既定クライアントだけでは取得できず "この動画はご覧いただけません" となる。
 # PO Token が必要な mweb クライアントを既定に追加して取得できるようにする。
@@ -182,7 +183,10 @@ def probe_and_build_jobs(
             job_id_sanitized = fallback_id
 
         job["filename"] = filename_sanitized
-        job["id"] = job_id_sanitized
+        # 同じ URL・同じ名前の再投入でも記録が衝突しないよう、一意な値を付ける
+        job["id"] = (
+            _trim_utf8_bytes(job_id_sanitized, MAX_JOB_ID_BYTES - UNIQUE_SUFFIX_BYTES)
+            + "-" + uuid.uuid4().hex[:8])
 
         if isinstance(target_url, str) and target_url.strip():
             job["url"] = target_url

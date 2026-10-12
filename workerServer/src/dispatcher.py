@@ -116,13 +116,19 @@ class Dispatcher:
                 if self.stopping.wait(timeout=5):
                     break
 
-    def _consume_exit_codes(self) -> None:
-        for rc in self.backend.pop_recent_exit_codes():
+    def _consume_exits(self) -> None:
+        for worker_id, rc in self.backend.pop_recent_exits():
             if rc == 0:
                 self._consecutive_failures = 0
-            else:
-                self._consecutive_failures += 1
-                print(f"WARNING: worker exited with code {rc}")
+                continue
+            self._consecutive_failures += 1
+            print(f"WARNING: worker {worker_id} exited with code {rc}")
+            if worker_id:
+                # リースの失効を待たず、続く回収で直ちに再実行の対象にする
+                try:
+                    jobs.release_lease(self.redis, worker_id)
+                except Exception as e:  # noqa: BLE001
+                    print("WARNING: Failed to release lease:", e)
 
     def _backoff_seconds(self) -> float:
         if self._consecutive_failures <= 0:
@@ -133,7 +139,7 @@ class Dispatcher:
     def _main_loop(self) -> None:
         next_allowed_start = 0.0
         while not self.stopping.is_set():
-            self._consume_exit_codes()
+            self._consume_exits()
             try:
                 reclaimed = jobs.reclaim_stale(
                     self.redis, inprogress_stale=self.cfg.inprogress_stale,

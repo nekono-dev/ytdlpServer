@@ -29,7 +29,7 @@ class LoopTest(unittest.TestCase):
         self.redis = FakeRedis()
         self.backend = mock.Mock()
         self.backend.running_count.return_value = 0
-        self.backend.pop_recent_exit_codes.return_value = []
+        self.backend.pop_recent_exits.return_value = []
         self.d = dispatcher.Dispatcher(dispatcher.Config(), self.backend, self.redis, mock.Mock())
 
     def tearDown(self) -> None:
@@ -110,6 +110,24 @@ class LoopTest(unittest.TestCase):
         failed = self.redis.hgetall("ytdlp:jobs:failed:j")
         self.assertEqual((failed["error_code"], failed["failed_count"]), ("interrupted", "1"))
 
+    def test_abnormal_exit_releases_lease_and_reclaims_immediately(self) -> None:
+        self.jobs.acquire_lease(self.redis, "w-dead", ttl=600)          # リースはまだ生きている
+        self.redis.hset("ytdlp:jobs:in_progress:j", mapping={
+            "worker_id": "w-dead", "failed_count": "0", "status": "in_progress"})
+        self.backend.pop_recent_exits.return_value = [("w-dead", 137)]
+        self.run_one_cycle()
+        failed = self.redis.hgetall("ytdlp:jobs:failed:j")
+        self.assertEqual((failed["error_code"], failed["failed_count"]), ("interrupted", "1"))
+        self.assertFalse(self.jobs.lease_alive(self.redis, "w-dead"))
+
+    def test_normal_exit_does_not_touch_other_leases(self) -> None:
+        self.jobs.acquire_lease(self.redis, "w-live", ttl=600)
+        self.redis.hset("ytdlp:jobs:in_progress:j", mapping={
+            "worker_id": "w-live", "failed_count": "0", "status": "in_progress"})
+        self.backend.pop_recent_exits.return_value = [("w-done", 0)]
+        self.run_one_cycle()
+        self.assertIn("ytdlp:jobs:in_progress:j", self.redis.hashes)
+
     def test_run_stops_started_workers_on_shutdown(self) -> None:
         with mock.patch.object(self.d, "_main_loop"), \
                 mock.patch("threading.Thread"), mock.patch("signal.signal"):
@@ -160,8 +178,10 @@ class DockerBackendTest(unittest.TestCase):
         self.assertEqual(kwargs["command"], ["python3", "-u", "/workspace/main.py"])
         self.assertEqual(kwargs["volumes_from"], ["me"])
         self.assertEqual(kwargs["network_mode"], "container:me")
-        self.assertEqual(kwargs["labels"], {"ytdlp.role": "worker"})
-        self.assertEqual(kwargs["environment"], ["REDIS_URL=redis://redis", "WORKER_MAX=2"])
+        worker_id = kwargs["labels"]["ytdlp.worker_id"]
+        self.assertEqual(kwargs["labels"], {"ytdlp.role": "worker", "ytdlp.worker_id": worker_id})
+        self.assertEqual(kwargs["environment"],
+                         ["REDIS_URL=redis://redis", "WORKER_MAX=2", f"WORKER_ID={worker_id}"])
         self.assertTrue(kwargs["auto_remove"])
 
     def test_running_workers_are_counted_by_label(self) -> None:
@@ -179,10 +199,10 @@ class DockerBackendTest(unittest.TestCase):
 
     def test_exit_events_record_exit_codes_and_wake(self) -> None:
         self.client.events.return_value = iter([
-            {"Actor": {"Attributes": {"exitCode": "0"}}},
-            {"Actor": {"Attributes": {"exitCode": "137"}}}])
+            {"Actor": {"Attributes": {"exitCode": "0", "ytdlp.worker_id": "w-a"}}},
+            {"Actor": {"Attributes": {"exitCode": "137", "ytdlp.worker_id": "w-b"}}}])
         self.backend._watch_events()
-        self.assertEqual(self.backend.pop_recent_exit_codes(), [0, 137])
+        self.assertEqual(self.backend.pop_recent_exits(), [("w-a", 0), ("w-b", 137)])
         self.assertTrue(self.backend.wake_event.is_set())
 
 

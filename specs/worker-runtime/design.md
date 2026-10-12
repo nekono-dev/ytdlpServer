@@ -37,6 +37,8 @@ run_once(worker_id, stop)
 
 ### D-2: リースと所有者 (FR-4, FR-5, FR-7, NFR-2)
 
+ワーカーの識別子は環境変数 `WORKER_ID` を使い、無ければホスト名・プロセス ID・起動時刻から作る。
+
 ```python
 SET ytdlp:workers:<worker_id> 1 EX LEASE_TTL      # 起動時
 # ハートビートのスレッドが HEARTBEAT_INTERVAL ごとに更新する
@@ -64,10 +66,10 @@ SIGTERM / SIGINT → 停止のフラグを立てる
 
 取得の直後に停止の指示が来ていた場合も、実行せずに同じ記録に戻す。
 
-### D-4: 実行と出力先 (FR-8, FR-9)
+### D-4: 実行と出力先 (FR-8, FR-10)
 
 ```python
-base = safe_name or str(job_id)                       # ファイル名が空ならジョブの識別子
+base = job.get("output_name") or safe_name or str(job_id)   # 記録された名前、ファイル名、ジョブの識別子の順
 outtmpl = str(SAVEDIR / subpath / (base + ".%(ext)s"))   # 拡張子は yt-dlp が決める
 cmd = ["yt-dlp", "--no-progress", *cookie_opts, *with_youtube_defaults(options),
        "-o", outtmpl, "--no-playlist", url]
@@ -80,7 +82,31 @@ cmd = ["yt-dlp", "--no-progress", *cookie_opts, *with_youtube_defaults(options),
 | 再実行           | 同じ保存先・同じ名前を使う。`--no-continue` を足さず、途中のファイルから再開できる                                                      |
 | YouTube の既定値 | `--extractor-args youtube:` に `player_client=default,mweb` を補う。`player_client=` が既にあれば変えない。指定が無ければ引数ごと加える |
 
-### D-5: cookie を使った実行 (FR-10, NFR-3)
+### D-5: 保存名の競合回避 (FR-9)
+
+実行の前に、保存先ごとに使うファイル名を1つ選んで、ジョブの記録の `output_name` に保存する。再実行では記録された名前をそのまま使い、選び直さない（途中のファイルから再開できる）。
+
+```python
+def reserve_output_name(client, dest_dir, base, job_id, ttl) -> str:
+    n = 0
+    while True:
+        name = base if n == 0 else f"{base} ({n})"
+        n += 1
+        if any(dest_dir.glob(glob.escape(name) + ".*")):      # 完成したファイルと途中のファイル
+            continue
+        key = f"ytdlp:names:{sha1(str(dest_dir / name))}"
+        if client.set(key, job_id, nx=True, ex=ttl) or client.get(key) == job_id:
+            return name                                        # 他のジョブが予約していない名前
+```
+
+| 項目       | 規則                                                                                 |
+| ---------- | ------------------------------------------------------------------------------------ |
+| 同名の判定 | 保存先に `<名前>.*` に一致するファイルがある（拡張子と途中のファイルを問わない）     |
+| 予約       | Redis の `ytdlp:names:<保存先と名前のハッシュ>` に、ジョブ ID を `SET NX` で保存する |
+| 予約の期限 | ジョブ記録と同じ保持期間                                                             |
+| 連番の形式 | 名前の末尾に半角スペース、丸括弧で囲んだ連番（`動画 (1)`）。拡張子は yt-dlp が付ける |
+
+### D-6: cookie を使った実行 (FR-11, NFR-3)
 
 | 場面                         | 動作                                                                   |
 | ---------------------------- | ---------------------------------------------------------------------- |
@@ -89,7 +115,7 @@ cmd = ["yt-dlp", "--no-progress", *cookie_opts, *with_youtube_defaults(options),
 | ログ                         | コマンドの `--cookies` の値を `<cookies>` に置き換える                 |
 | プロファイルのファイルが無い | 実行せず、ログイン要求の文言で失敗させる                               |
 
-### D-6: 失敗の記録 (FR-11, FR-12)
+### D-7: 失敗の記録 (FR-12)
 
 ```python
 def record_failure(key, auth_profile, output, url):
@@ -119,6 +145,6 @@ def record_failure(key, auth_profile, output, url):
 | 取得中の Redis エラー          | エラーを出して終了コード 1 で終了する          |
 | 解析できないジョブ             | 退避用のキューへ移し、終了コード 0 で終了する  |
 | 所有者が別のワーカー           | 警告を出し、結果を書き込まずに終了する         |
-| yt-dlp の失敗                  | 失敗として記録する（D-6）                      |
+| yt-dlp の失敗                  | 失敗として記録する                             |
 | yt-dlp が見つからない          | 失敗として記録する                             |
 | リースの更新失敗               | 警告を出す。失敗が有効期間続けば実行を中止する |

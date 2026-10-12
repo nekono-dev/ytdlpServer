@@ -102,6 +102,50 @@ class RuntimeTest(unittest.TestCase):
         merged = self.function.with_youtube_defaults(["--extractor-args", "youtube:lang=ja"])
         self.assertEqual(merged, ["--extractor-args", "youtube:lang=ja;player_client=default,mweb"])
 
+    def reserve(self, base: str, job_id: str) -> str:
+        return self.m.jobs.reserve_output_name(self.redis, Path(self.download), base, job_id, 100)
+
+    def test_output_name_gets_numbers_when_destination_has_same_name(self) -> None:
+        self.assertEqual(self.reserve("t", "j0"), "t")
+        (Path(self.download) / "u.mp4").write_text("x")
+        self.assertEqual(self.reserve("u", "j1"), "u (1)")
+        (Path(self.download) / "u (1).mp4.part").write_text("x")
+        self.assertEqual(self.reserve("u", "j2"), "u (2)")
+
+    def test_output_name_treats_other_extensions_and_partial_files_as_same_name(self) -> None:
+        (Path(self.download) / "v.f137.mp4.part").write_text("x")
+        self.assertEqual(self.reserve("v", "j1"), "v (1)")
+        (Path(self.download) / "w (1).mp4").write_text("x")
+        self.assertEqual(self.reserve("w", "j2"), "w", "連番つきの別名は w の競合にならない")
+
+    def test_output_name_is_recorded_stable_and_not_shared_between_jobs(self) -> None:
+        self.assertEqual(self.reserve("x", "ja"), "x")
+        self.assertEqual(self.reserve("x", "ja"), "x", "同じジョブなら同じ名前")
+        self.assertEqual(self.reserve("x", "jb"), "x (1)", "同時に走る別のジョブとは重ならない")
+        self.redis.rpush("ytdlp:queue", json.dumps({"id": "jc", "url": "u", "options": [], "filename": "y"}))
+        (Path(self.download) / "y.mp4").write_text("old")
+        jobs_seen: list[dict] = []
+
+        def fake_run(job: dict, on_process_start: object = None) -> tuple[bool, str]:
+            jobs_seen.append(dict(job))
+            return False, "boom"
+
+        with mock.patch.object(self.m, "run_yt_dlp", side_effect=fake_run):
+            self.m.run_once("w1", threading.Event())
+        failed = self.redis.hgetall("ytdlp:jobs:failed:jc")
+        self.assertEqual((jobs_seen[0]["output_name"], failed["output_name"]), ("y (1)", "y (1)"))
+        with mock.patch.object(self.m, "run_yt_dlp", side_effect=fake_run):
+            self.m.run_once("w1", threading.Event())
+        self.assertEqual(jobs_seen[1]["output_name"], "y (1)", "再実行では記録された名前を使う")
+
+    def test_worker_id_comes_from_environment(self) -> None:
+        with mock.patch.dict(os.environ, {"WORKER_ID": "w-fixed"}), \
+                mock.patch.object(self.m.jobs, "acquire_lease") as acquire, \
+                mock.patch.object(self.m, "run_once", return_value=0), \
+                mock.patch.object(self.m.signal, "signal"):
+            self.m.main()
+        self.assertEqual(acquire.call_args.args[1], "w-fixed")
+
     def test_default_settings(self) -> None:
         self.assertEqual((self.m.STOP_GRACE, self.m.HEARTBEAT_INTERVAL, self.m.LEASE_TTL), (20, 10, 60))
 

@@ -55,7 +55,10 @@ class FakeRedis:
 
     # ---- string (リース) -------------------------------------------------
 
-    def set(self, key: str, value: str, ex: int | None = None) -> bool:  # noqa: ARG002
+    def set(self, key: str, value: str, ex: int | None = None,  # noqa: ARG002
+            nx: bool = False) -> bool | None:
+        if nx and key in self.strings:
+            return None
         self.strings[key] = str(value)
         return True
 

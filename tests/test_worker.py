@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -303,8 +304,9 @@ class RunOnceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.dir = tempfile.mkdtemp()
         self.redis = FakeRedis()
-        self.m = load_service("workerServer", self.dir, self.redis)
         os.environ["DOWNLOAD_DIR"] = self.dir
+        self.m = load_service("workerServer", self.dir, self.redis)
+        sys.modules["function"].SAVEDIR = Path(self.dir)
 
     def run_once_with(self, ok: bool, output: str = "out") -> object:
         stop = self.m.threading.Event()

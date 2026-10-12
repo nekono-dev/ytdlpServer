@@ -50,6 +50,25 @@ def with_youtube_defaults(options: list[str]) -> list[str]:
 
     return result
 
+def output_target(job: dict[str, Any]) -> tuple[Path, str]:
+    """ジョブの保存先ディレクトリ (作成する) と、連番を付ける前のファイル名を返す。"""
+    savedir = job.get("savedir") or ""
+    dest_dir = SAVEDIR / Path(unicodedata.normalize("NFC", savedir))
+    Path.mkdir(dest_dir, parents=True, exist_ok=True)
+
+    safe_name = job.get("filename")
+    if isinstance(safe_name, list):
+        safe_name = "".join(str(x) for x in safe_name)
+    # Ensure we never pass None into unicodedata.normalize
+    safe_name = str(safe_name or "")
+    safe_name = unicodedata.normalize("NFC", safe_name)
+    safe_name = Path(safe_name).name
+    safe_name = re.sub(r'[\\/¥:*?"<>|]', "_", safe_name)
+    safe_name = re.sub(r"\s+", " ", safe_name.replace("\u3000", " ")).strip()
+    # 空の場合は job_id を使う
+    return dest_dir, safe_name if safe_name else str(job.get("id"))
+
+
 def run_yt_dlp(
         job: dict[str, Any],
         on_process_start: Any = None) -> tuple[bool, str]:
@@ -61,28 +80,13 @@ def run_yt_dlp(
     """
     url = job.get("url")
     options = job.get("options") or []
-    savedir = job.get("savedir") or ""
-    subpath = Path(unicodedata.normalize("NFC", savedir))
-    Path.mkdir(SAVEDIR / subpath, parents=True, exist_ok=True)
+    dest_dir, base_name = output_target(job)
+    # 競合回避で選んだ名前 (output_name) があれば、再実行でも同じ名前を使う
+    base_name = job.get("output_name") or base_name
+    print("INFO: Filename: ", base_name)
 
-    safe_name = job.get("filename")
-    if isinstance(safe_name, list):
-        safe_name = "".join(str(x) for x in safe_name)
-    # Ensure we never pass None into unicodedata.normalize
-    safe_name = str(safe_name or "")
-    safe_name = unicodedata.normalize("NFC", safe_name)
-    safe_name = Path(safe_name).name
-    safe_name = re.sub(r'[\\/¥:*?"<>|]', "_", safe_name)
-    safe_name = re.sub(r"\s+", " ", safe_name.replace("\u3000", " ")).strip()
-
-    print("INFO: Filename: ", safe_name)
-
-    job_id = job.get("id")
-
-    # 直接配置方式: 最終保存先に yt-dlp が直接出力する
-    # safe_name が空の場合は job_id を利用し、常に拡張子は yt-dlp に決定させる
-    base_name = safe_name if safe_name else str(job_id)
-    outtmpl = str(SAVEDIR / subpath / (base_name + ".%(ext)s"))
+    # 直接配置方式: 最終保存先に yt-dlp が直接出力する。拡張子は yt-dlp に決定させる
+    outtmpl = str(dest_dir / (base_name + ".%(ext)s"))
 
     try:
         # auth_profile 指定時は cookie の一時コピーを渡し、更新分はストアへ書き戻す

@@ -18,7 +18,7 @@ test("dispatcher/AC-4: 起動数は対象の数と空きの小さい方で、空
 test("dispatcher/AC-5: 実行中のワーカーをラベルの一覧から数え直せる", () =>
   py([`${K}.test_running_workers_are_counted_by_label`]))
 test("dispatcher/AC-6: 異常終了が続くと起動の間隔が延び、正常終了で0に戻る", () =>
-  py([`${D}.test_backoff_increases_then_resets`, `${D}.test_consume_exit_codes_updates_failure_streak`]))
+  py([`${D}.test_backoff_increases_then_resets`, `${D}.test_consume_exits_updates_failure_streak`]))
 test("dispatcher/AC-7: リースの無いワーカーの処理中ジョブが失敗回数を消費して回収される", () =>
   py([`${J}.test_reclaim_stale_in_progress_without_lease`, `${L}.test_loop_reclaims_jobs_of_workers_without_lease`]))
 test("dispatcher/AC-8: リースが生きているワーカーのジョブは回収されない", () =>
@@ -27,8 +27,8 @@ test("dispatcher/AC-9: 取り出し中の記録は、処理中の記録があれ
   py([`${J}.test_reclaim_stale_processing_returns_to_queue_head`, `${J}.test_reclaim_stale_processing_duplicate_not_requeued`]))
 test("dispatcher/AC-10: 所有者の記録が無い処理中ジョブは指定時間を過ぎたものだけ回収される", () =>
   py([`${J}.test_reclaim_stale_legacy_in_progress_without_worker_id`, `${J}.test_reclaim_stale_legacy_in_progress_not_yet_stale`]))
-test("dispatcher/AC-11: ワーカーの終了が検知され、終了コードが取得できる", () =>
-  py([`${B}.test_process_backend_tracks_running_and_exit_codes`, `${K}.test_exit_events_record_exit_codes_and_wake`]))
+test("dispatcher/AC-11: 異常終了したワーカーのリースが削除され、直ちに回収される", () =>
+  py([`${L}.test_abnormal_exit_releases_lease_and_reclaims_immediately`, `${L}.test_normal_exit_does_not_touch_other_leases`, `${B}.test_process_backend_tracks_running_and_exit_codes`, `${K}.test_exit_events_record_exit_codes_and_wake`]))
 test("dispatcher/AC-12: ワーカーのコンテナは同じイメージ・マウント・ネットワークで固定のコマンドで作られる", () =>
   py([`${K}.test_worker_container_shares_image_mounts_and_network_with_fixed_command`]))
 test("dispatcher/AC-13: 子プロセスの起動と実行中の数の取得ができる", () =>

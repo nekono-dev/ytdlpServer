@@ -121,23 +121,27 @@ class BackendsTest(unittest.TestCase):
             return 0
 
         proc.wait.side_effect = _wait
-        with mock.patch("subprocess.Popen", return_value=proc):
+        with mock.patch("subprocess.Popen", return_value=proc) as popen:
             backend = self.backends.ProcessBackend(cmd=["true"], env={})
             backend.start_worker()
             self.assertEqual(backend.running_count(), 1)
             # _wait_for はスレッドで動くため、完了を待つ
             self.assertTrue(backend.wake_event.wait(timeout=2))
         self.assertEqual(backend.running_count(), 0)
-        self.assertEqual(backend.pop_recent_exit_codes(), [0])
+        exits = backend.pop_recent_exits()
+        self.assertEqual([rc for _, rc in exits], [0])
+        self.assertTrue(exits[0][0].startswith("w-"))
+        # 起動したワーカーには識別子が環境変数で渡される
+        self.assertEqual(popen.call_args.kwargs["env"]["WORKER_ID"], exits[0][0])
         # 一度取り出したら空になる
-        self.assertEqual(backend.pop_recent_exit_codes(), [])
+        self.assertEqual(backend.pop_recent_exits(), [])
 
     def test_process_backend_stop_all_terminates(self) -> None:
         proc = mock.Mock(pid=1)
         proc.wait.side_effect = [None]  # start_worker の _wait_for 用スレッドではブロックし続ける想定を回避
         with mock.patch("subprocess.Popen", return_value=proc):
             backend = self.backends.ProcessBackend(cmd=["sleep", "100"], env={})
-            with mock.patch.object(backend, "_procs", {1: proc}):
+            with mock.patch.object(backend, "_procs", {1: ("w-1", proc)}):
                 backend.stop_all(timeout=1)
         proc.terminate.assert_called_once()
 
@@ -192,13 +196,13 @@ class DispatcherTest(unittest.TestCase):
         d._consecutive_failures = 10
         self.assertEqual(d._backoff_seconds(), 60)  # 上限で頭打ち
 
-    def test_consume_exit_codes_updates_failure_streak(self) -> None:
+    def test_consume_exits_updates_failure_streak(self) -> None:
         d = self.make()
-        d.backend.pop_recent_exit_codes.return_value = [1, 1]
-        d._consume_exit_codes()
+        d.backend.pop_recent_exits.return_value = [("a", 1), ("b", 1)]
+        d._consume_exits()
         self.assertEqual(d._consecutive_failures, 2)
-        d.backend.pop_recent_exit_codes.return_value = [0]
-        d._consume_exit_codes()
+        d.backend.pop_recent_exits.return_value = [("c", 0)]
+        d._consume_exits()
         self.assertEqual(d._consecutive_failures, 0)
 
     def test_start_one_starts_backend_worker(self) -> None:

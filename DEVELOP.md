@@ -286,6 +286,7 @@ List。API が `RPUSH` する。要素は次の JSON。worker は `LMOVE` で 1 
 
 List。`/schedule` が保存した `url` / `options` / `savedir` / `namefield` / `auth_profile` の JSON。
 `/download/scheduled` で 401（ログイン要求）になった要素は、先頭へ戻して残す。
+それ以外の失敗（解析失敗など）をした要素は、`ytdlp:requests:failed`（List、同じ JSON）へ退避し、残りの予約の処理を続ける。応答の `failed` が退避した件数。
 
 ### ジョブ状態（`ytdlp:jobs:<status>:<job_id>`）
 
@@ -299,16 +300,17 @@ Hash。`status` がキー名に入るため、状態が変わると **キーご�
 | url / options / savedir / filename | ジョブの内容（options は JSON 文字列） |
 | created_at   | 作成時刻（UNIX 秒）                             |
 | started_at / completed_at / failed_at | 各時刻                      |
-| worker_id    | 実行中の worker（ホスト名・PID・起動時刻から生成）。生存確認は `ytdlp:workers:<worker_id>`（TTL 付き文字列）で行う |
+| worker_id    | 実行中の worker（dispatcher が環境変数 `WORKER_ID` で渡す。無ければホスト名・PID・起動時刻から生成）。生存確認は `ytdlp:workers:<worker_id>`（TTL 付き文字列）で行う |
 | output       | 成功時の yt-dlp の標準出力                      |
 | error        | 失敗時のエラー内容                              |
 | failed_count | 失敗回数。`RETRY_COUNT` に達すると自動リトライされない |
 | auth_profile | cookie プロファイル名（未指定は空）             |
 | error_code   | ログイン要求で失敗したとき `login_required`。停止指示・異常終了による中断は `interrupted`。それ以外の失敗では空 |
 | login_url    | `BROWSER_UI_URL` があるときの再ログイン先       |
+| output_name  | 保存に使うファイル名（同名のファイルがあれば ` (1)` のような連番つき）。再実行でも同じ名前を使う。予約は `ytdlp:names:<保存先と名前のハッシュ>`（`SET NX`、ジョブ ID を保存） |
 
 `error_code=interrupted` は、`failed_count` を消費しない場合（停止指示）と、消費する場合（dispatcher による異常終了の回収）がある。
-同じ ID のジョブを重複して積むと、状態キーが上書きされる点に注意する（実行中に別の投入が来ると、記録の所有者が入れ替わりうる）。
+ジョブ ID は `<動画 ID またはファイル名>-<UUID の先頭 8 桁>` で、同じ URL を重ねて積んでも衝突しない。
 
 ### 通知チャンネル（`ytdlp:events`）
 

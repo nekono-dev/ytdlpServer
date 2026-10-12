@@ -14,7 +14,7 @@ import redis
 
 import cookies
 import jobs
-from function import run_yt_dlp
+from function import output_target, run_yt_dlp
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379")
 REDIS_TTL = int(os.environ.get("REDIS_TTL", str(7 * 24 * 60 * 60)))
@@ -67,6 +67,7 @@ def _load_job_from_hash(key: str) -> dict[str, Any]:
         "savedir": data.get("savedir", ""),
         "filename": data.get("filename", ""),
         "auth_profile": data.get("auth_profile", ""),
+        "output_name": data.get("output_name", ""),
         "id": key.split(":")[-1],
     }
 
@@ -170,6 +171,13 @@ def run_once(worker_id: str, stop_requested: threading.Event) -> int:
                 reason="stopped before execution", ttl=REDIS_TTL)
         return 0
 
+    if not job.get("output_name"):
+        # 保存先の同名ファイルと競合しない名前を選び、再実行でも使えるよう記録する
+        dest_dir, base_name = output_target(job)
+        job["output_name"] = jobs.reserve_output_name(
+            redis_client, dest_dir, base_name, key.split(":")[-1], REDIS_TTL)
+        redis_client.hset(key, "output_name", job["output_name"])
+
     status, output = _execute(job, stop_requested)
 
     if not jobs.is_owner(redis_client, key, worker_id):
@@ -196,7 +204,8 @@ def run_once(worker_id: str, stop_requested: threading.Event) -> int:
 
 def main() -> int:
     print("INFO: Worker started — processing at most one job then exit")
-    worker_id = f"{socket.gethostname()}-{os.getpid()}-{int(time.time() * 1000)}"
+    worker_id = os.environ.get("WORKER_ID") or (
+        f"{socket.gethostname()}-{os.getpid()}-{int(time.time() * 1000)}")
     stop_requested = threading.Event()
     finished = threading.Event()
 

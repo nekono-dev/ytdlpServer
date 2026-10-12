@@ -29,21 +29,27 @@ test("worker-runtime/AC-10: 保存先とファイル名が出力先に反映さ�
   py([`${X}.test_output_template_uses_savedir_filename_or_job_id`]))
 test("worker-runtime/AC-11: 失敗したジョブを再実行しても保存先とファイル名が変わらない", () =>
   py([`${X}.test_failed_job_is_retried_with_same_destination`, `${X}.test_output_template_uses_savedir_filename_or_job_id`]))
-test("worker-runtime/AC-12: YouTube の既定値が加わり、明示した指定は変更されない", () =>
+test("worker-runtime/AC-12: 同名のファイルがあると末尾に連番が付き、使用済みなら次の連番になる", () =>
+  py([`${X}.test_output_name_gets_numbers_when_destination_has_same_name`]))
+test("worker-runtime/AC-13: 同名が無ければ名前は変わらず、拡張子の違うファイルと途中のファイルも同名として扱われる", () =>
+  py([`${X}.test_output_name_gets_numbers_when_destination_has_same_name`, `${X}.test_output_name_treats_other_extensions_and_partial_files_as_same_name`]))
+test("worker-runtime/AC-14: 選んだ名前が記録され、再実行で同じ名前を使い、別のジョブとは重ならない", () =>
+  py([`${X}.test_output_name_is_recorded_stable_and_not_shared_between_jobs`]))
+test("worker-runtime/AC-15: YouTube の既定値が加わり、明示した指定は変更されない", () =>
   py([`${X}.test_youtube_defaults_added_and_explicit_choice_kept`]))
-test("worker-runtime/AC-13: cookie の一時コピーで実行し、失敗しても書き戻し、ログの値が伏せられる", () =>
+test("worker-runtime/AC-16: cookie の一時コピーで実行し、失敗しても書き戻し、ログの値が伏せられる", () =>
   py([`${F}.test_cmd_has_cookies_and_log_is_masked`, `${F}.test_no_profile_no_cookies_flag`, `${F}.test_failure_still_writes_back_cookies`]))
-test("worker-runtime/AC-14: 未保存のプロファイルのジョブは実行せずログイン要求として失敗する", () =>
+test("worker-runtime/AC-17: 未保存のプロファイルのジョブは実行せずログイン要求として失敗する", () =>
   py([`${F}.test_missing_profile_fails_as_login_required`]))
-test("worker-runtime/AC-15: ログイン要求の失敗で理由の区分と再ログイン用 URL が記録され、プロファイルが失効になる", () =>
+test("worker-runtime/AC-18: ログイン要求の失敗で理由の区分と再ログイン用 URL が記録され、プロファイルが失効になる", () =>
   py([`${M}.test_record_failure_login_required`, `${M}.test_record_failure_login_url`]))
-test("worker-runtime/AC-16: プロファイルの無いジョブでは URL に対応するプロファイルの再ログイン用 URL が記録される", () =>
+test("worker-runtime/AC-19: プロファイルの無いジョブでは URL に対応するプロファイルの再ログイン用 URL が記録される", () =>
   py([`${M}.test_record_failure_login_url_resolves_profile`]))
-test("worker-runtime/AC-17: ログイン要求以外の失敗で失敗回数が増え、理由の区分が空になる", () =>
+test("worker-runtime/AC-20: ログイン要求以外の失敗で失敗回数が増え、理由の区分が空になる", () =>
   py([`${R}.test_failed_job_increments_failed_count`, `${M}.test_record_failure_other_error_clears_code`]))
-test("worker-runtime/AC-18: 停止の猶予の既定値が 20 秒である", () =>
+test("worker-runtime/AC-21: 停止の猶予の既定値が 20 秒である", () =>
   py([`${X}.test_default_settings`]))
-test("worker-runtime/AC-19: リースの更新間隔の既定値が10秒、有効期間の既定値が60秒である", () =>
-  py([`${X}.test_default_settings`]))
-test("worker-runtime/AC-20: ログ用のコマンドと失敗の記録に cookie の値が含まれない", () =>
+test("worker-runtime/AC-22: リースの更新間隔の既定値が10秒、有効期間の既定値が60秒である", () =>
+  py([`${X}.test_default_settings`, `${X}.test_worker_id_comes_from_environment`]))
+test("worker-runtime/AC-23: ログ用のコマンドと失敗の記録に cookie の値が含まれない", () =>
   py([`${F}.test_cmd_has_cookies_and_log_is_masked`, `${X}.test_failure_record_never_contains_cookie_values`]))

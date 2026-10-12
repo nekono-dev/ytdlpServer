@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
+import uuid
 from collections import deque
 from typing import TYPE_CHECKING
 
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
 
 WORKER_LABEL_KEY = "ytdlp.role"
 WORKER_LABEL_VALUE = "worker"
+WORKER_ID_LABEL_KEY = "ytdlp.worker_id"
 
 
 class ProcessBackend:
@@ -27,8 +29,8 @@ class ProcessBackend:
         self._cmd = list(cmd)
         self._env = dict(env)
         self._lock = threading.Lock()
-        self._procs: dict[int, subprocess.Popen] = {}
-        self._recent_exit_codes: deque[int] = deque(maxlen=100)
+        self._procs: dict[int, tuple[str, subprocess.Popen]] = {}
+        self._recent_exits: deque[tuple[str, int]] = deque(maxlen=100)
         self.wake_event = threading.Event()
 
     def reconcile(self) -> int:
@@ -40,27 +42,31 @@ class ProcessBackend:
             return len(self._procs)
 
     def start_worker(self) -> None:
-        proc = subprocess.Popen(self._cmd, env=self._env)  # noqa: S603
+        worker_id = f"w-{uuid.uuid4().hex[:12]}"
+        proc = subprocess.Popen(  # noqa: S603
+            self._cmd, env={**self._env, "WORKER_ID": worker_id})
         with self._lock:
-            self._procs[proc.pid] = proc
-        threading.Thread(target=self._wait_for, args=(proc,), daemon=True).start()
+            self._procs[proc.pid] = (worker_id, proc)
+        threading.Thread(
+            target=self._wait_for, args=(worker_id, proc), daemon=True).start()
 
-    def _wait_for(self, proc: subprocess.Popen) -> None:
+    def _wait_for(self, worker_id: str, proc: subprocess.Popen) -> None:
         rc = proc.wait()
         with self._lock:
             self._procs.pop(proc.pid, None)
-            self._recent_exit_codes.append(rc)
+            self._recent_exits.append((worker_id, rc))
         self.wake_event.set()
 
-    def pop_recent_exit_codes(self) -> list[int]:
+    def pop_recent_exits(self) -> list[tuple[str, int]]:
+        """終了したワーカーの (識別子, 終了コード) を取り出す。"""
         with self._lock:
-            codes = list(self._recent_exit_codes)
-            self._recent_exit_codes.clear()
-        return codes
+            exits = list(self._recent_exits)
+            self._recent_exits.clear()
+        return exits
 
     def stop_all(self, timeout: float) -> None:
         with self._lock:
-            procs = list(self._procs.values())
+            procs = [p for _, p in self._procs.values()]
         for p in procs:
             p.terminate()
         for p in procs:
@@ -89,7 +95,7 @@ class DockerBackend:
         self.stop_timeout = stop_timeout
         self.wake_event = threading.Event()
         self._lock = threading.Lock()
-        self._recent_exit_codes: deque[int] = deque(maxlen=100)
+        self._recent_exits: deque[tuple[str, int]] = deque(maxlen=100)
         self._events_ok = True
         threading.Thread(target=self._watch_events, daemon=True).start()
 
@@ -114,7 +120,9 @@ class DockerBackend:
         # 画像 ID をそのまま使う (`.image` プロパティは IMAGES API を追加で要求する
         # ため使わない。proxy には CONTAINERS/POST/EVENTS しか許可していない)。
         image = self_container.attrs["Image"]
-        env = self_container.attrs.get("Config", {}).get("Env", [])
+        worker_id = f"w-{uuid.uuid4().hex[:12]}"
+        env = [*self_container.attrs.get("Config", {}).get("Env", []),
+               f"WORKER_ID={worker_id}"]
         try:
             # stop_timeout は containers.run() の対応キーワードに無いため渡さない。
             # 停止時は stop_all() が毎回 timeout を明示して stop() を呼ぶ (自前で管理)。
@@ -124,21 +132,22 @@ class DockerBackend:
                 environment=env,
                 volumes_from=[self.self_id],
                 network_mode=f"container:{self.self_id}",
-                labels={WORKER_LABEL_KEY: WORKER_LABEL_VALUE},
+                labels={WORKER_LABEL_KEY: WORKER_LABEL_VALUE,
+                        WORKER_ID_LABEL_KEY: worker_id},
                 detach=True,
                 auto_remove=True,
             )
         except Exception as e:  # noqa: BLE001
             print("ERROR: Failed to start worker container:", e)
             with self._lock:
-                self._recent_exit_codes.append(1)
+                self._recent_exits.append((worker_id, 1))
             self.wake_event.set()
 
-    def pop_recent_exit_codes(self) -> list[int]:
+    def pop_recent_exits(self) -> list[tuple[str, int]]:
         with self._lock:
-            codes = list(self._recent_exit_codes)
-            self._recent_exit_codes.clear()
-        return codes
+            exits = list(self._recent_exits)
+            self._recent_exits.clear()
+        return exits
 
     def stop_all(self, timeout: float) -> None:
         try:
@@ -161,13 +170,13 @@ class DockerBackend:
         filters = {**self._filters(), "type": ["container"], "event": ["die"]}
         try:
             for event in self.client.events(decode=True, filters=filters):
-                code = event.get("Actor", {}).get("Attributes", {}).get(
-                    "exitCode", "0")
+                attrs = event.get("Actor", {}).get("Attributes", {})
+                worker_id = attrs.get(WORKER_ID_LABEL_KEY, "")
                 with self._lock:
                     try:
-                        self._recent_exit_codes.append(int(code))
+                        self._recent_exits.append((worker_id, int(attrs.get("exitCode", "0"))))
                     except ValueError:
-                        self._recent_exit_codes.append(1)
+                        self._recent_exits.append((worker_id, 1))
                 self.wake_event.set()
         except Exception as e:  # noqa: BLE001
             self._events_ok = False

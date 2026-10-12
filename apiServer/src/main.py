@@ -24,6 +24,7 @@ PORT = int(os.environ.get("PORT", "5000"))
 
 QUEUE_PREFIX_BASE = "ytdlp:queue"
 REQUESTS_PREFIX_BASE = "ytdlp:requests"
+FAILED_REQUESTS_KEY = f"{REQUESTS_PREFIX_BASE}:failed"
 JOBS_PREFIX_BASE = "ytdlp:jobs"
 EVENTS_CHANNEL = "ytdlp:events"
 
@@ -364,6 +365,7 @@ def get_scheduled_requests() -> tuple[dict, int]:
 def download_scheduled() -> tuple[dict, int]:
     key = REQUESTS_PREFIX_BASE
     processed = 0
+    failed = 0
 
     if redis_client is None:
         return jsonify({"message": "Redis not available."}), 500
@@ -393,24 +395,21 @@ def download_scheduled() -> tuple[dict, int]:
 
             try:
                 req = json.loads(entry)
-            except Exception:
-                print("WARNING: Failed to parse scheduled request; skipping:", entry)
-                continue
-
-            url = req.get("url")
-            options = req.get("options") or []
-            savedir = req.get("savedir")
-            namefield = req.get("namefield")
-            auth_profile = req.get("auth_profile")
-
-            msg, code = handle_download(
-                url, options, savedir, namefield, auth_profile)
+                msg, code = handle_download(
+                    req.get("url"), req.get("options") or [], req.get("savedir"),
+                    req.get("namefield"), req.get("auth_profile"))
+            except Exception as e:
+                print("WARNING: Failed to process scheduled request:", e)
+                msg, code = None, 500
             if code == 401:
                 # ログイン待ち: 予約を先頭へ戻し、ログイン要求をそのまま返す
                 redis_client.lpush(key, entry)
                 return msg, code
             if code != 200:
-                raise Exception(msg.get_json().get("message", "Unknown error"))
+                # 失敗した予約は失われないよう退避し、残りの予約の処理を続ける
+                redis_client.rpush(FAILED_REQUESTS_KEY, entry)
+                failed += 1
+                continue
 
             processed += 1
     except Exception as e:
@@ -418,7 +417,8 @@ def download_scheduled() -> tuple[dict, int]:
         return jsonify({"message": "Internal server error."}), 500
 
     return jsonify({
-        "message": "Processed scheduled requests.", "count": str(processed)}), 200
+        "message": "Processed scheduled requests.", "count": str(processed),
+        "failed": str(failed)}), 200
 
 
 @app.route("/auth/profiles", methods=["GET"])

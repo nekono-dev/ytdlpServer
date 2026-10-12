@@ -27,12 +27,17 @@
 ```python
 def handle_download(url, options, savedir, namefield, auth_profile):
     profile, candidate = select_profile(url, auth_profile)
-    jobs = probe_jobs(url, options, savedir, namefield, profile)   # yt-dlp -J を実行
+    jobs = probe_jobs(url, options, savedir, namefield, profile)   # yt-dlp -J を実行。各ジョブに一意な ID が付く
     push_jobs(jobs)        # RPUSH ytdlp:queue、続けて notify("queued")
     return {"message": "Request accepted."}, 200
 ```
 
 ジョブと予約の JSON は auth_profile を含む。予約は実行時に cookie ストアの状態を見直す。
+
+| 項目       | 規則                                                                                                 |
+| ---------- | ---------------------------------------------------------------------------------------------------- |
+| ジョブ ID  | 表示名（動画 ID またはファイル名）を整形して 191 バイト以内に切り詰め、`-` と UUID の先頭8桁を付ける |
+| ファイル名 | 表示名のまま。同名の衝突はワーカーが保存時に避ける                                                   |
 
 ### D-2: 要求の検証 (FR-4, NFR-2)
 
@@ -79,19 +84,25 @@ def select_profile(url, auth_profile):
 
 候補があるときのログイン要求は、候補のプロファイルと状態から reason を決める（未保存は `profile_unknown`、失効は `cookie_expired`）。自動で選んだプロファイルはジョブの auth_profile に入る。
 
-### D-5: 予約実行 (FR-8)
+### D-5: 予約実行 (FR-8, FR-10)
 
 ```python
 entry = redis.lpop("ytdlp:requests")
-msg, code = handle_download(**json.loads(entry))
+try:
+    msg, code = handle_download(**json.loads(entry))
+except Exception:
+    msg, code = None, 500
 if code == 401:
-    redis.lpush("ytdlp:requests", entry)    # 先頭へ戻して 401 を返す
+    redis.lpush("ytdlp:requests", entry)         # 先頭へ戻して 401 を返す
     return msg, code
+if code != 200:
+    redis.rpush("ytdlp:requests:failed", entry)  # 失敗用の予約リストへ退避して続行する
+    failed += 1
 ```
 
-401 以外の失敗は 500 を返す。
+応答は `{"message": "Processed scheduled requests.", "count": "<処理した件数>", "failed": "<退避した件数>"}`。解析できない予約も退避する。
 
-### D-6: 通知と新版確認の依頼 (FR-9, FR-10, NFR-1)
+### D-6: 通知と新版確認の依頼 (FR-9, NFR-1)
 
 | 契機                      | メッセージ     | 発行位置           |
 | ------------------------- | -------------- | ------------------ |

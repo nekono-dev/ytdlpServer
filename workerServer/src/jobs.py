@@ -11,8 +11,11 @@
 """
 from __future__ import annotations
 
+import glob
+import hashlib
 import json
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import redis as redis_module
@@ -174,6 +177,26 @@ def take_retryable_failed(
         })
         return new_key
     return None
+
+
+def reserve_output_name(
+        client: redis_module.Redis, dest_dir: Path, base: str, job_id: str,
+        ttl: int) -> str:
+    """保存先で競合しないファイル名を選び、他のジョブに使われないよう予約する。
+
+    同名のファイル (拡張子と途中のファイルを問わない) があれば、末尾に ' (1)'、' (2)'
+    と連番を付ける。予約は Redis の SET NX で行い、同じジョブなら同じ名前を返す。
+    """
+    n = 0
+    while True:
+        name = base if n == 0 else f"{base} ({n})"
+        n += 1
+        if any(Path(p) for p in glob.glob(str(dest_dir / (glob.escape(name) + ".*")))):  # noqa: PTH207
+            continue
+        digest = hashlib.sha1(str(dest_dir / name).encode(), usedforsecurity=False).hexdigest()
+        key = f"ytdlp:names:{digest}"
+        if client.set(key, job_id, nx=True, ex=ttl) or client.get(key) == job_id:
+            return name
 
 
 def is_waiting_for_login(client: redis_module.Redis, data: dict[str, str]) -> bool:

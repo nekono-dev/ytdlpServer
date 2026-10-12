@@ -79,36 +79,50 @@ def _backoff_seconds(self) -> float:
 | `ytdlp:jobs:in_progress:*`  | 記録の `worker_id` のリースが無い                     | `failed` へ移し、`error_code=interrupted`、`failed_count` を1増やす                      |
 | `ytdlp:jobs:in_progress:*`  | `worker_id` が無く、`started_at` から指定時間を過ぎた | 同上                                                                                     |
 
-取り出し中の記録を先に処理する。処理中の記録の回収が先に済むと、同じワーカーの二重の記録をキューへ戻してしまうためである。ワーカーの終了を検知したときも監視ループを起床させるが、回収の判定は同じ条件で行う。
+取り出し中の記録を先に処理する。処理中の記録の回収が先に済むと、同じワーカーの二重の記録をキューへ戻してしまうためである。
+
+ワーカーの識別子は起動役が決め、環境変数 `WORKER_ID` で渡す。バックエンドは終了したワーカーの識別子と終了コードの組を返す。
+
+```python
+def _consume_exits(self):
+    for worker_id, rc in self.backend.pop_recent_exits():
+        if rc == 0:
+            self._consecutive_failures = 0
+        else:
+            self._consecutive_failures += 1
+            jobs.release_lease(self.redis, worker_id)   # リースの失効を待たない
+    # 続く reclaim_stale がリースの無いワーカーのジョブを回収する
+```
 
 ### D-5: 子プロセスのバックエンド (FR-9, FR-10)
 
 ```python
 class ProcessBackend:
     def start_worker(self):
-        proc = subprocess.Popen(self._cmd, env=self._env)
-        self._procs[proc.pid] = proc
+        worker_id = f"w-{uuid.uuid4().hex[:12]}"
+        proc = subprocess.Popen(self._cmd, env={**self._env, "WORKER_ID": worker_id})
+        self._procs[proc.pid] = (worker_id, proc)
         threading.Thread(target=self._wait_for, args=(proc,), daemon=True).start()
     def running_count(self) -> int: return len(self._procs)
     def stop_all(self, timeout):             # terminate → 待機 → 超過で kill
         ...
 ```
 
-終了したプロセスの終了コードを記録し、起床の合図を出す。ワーカー用の常駐サービスは登録しない。再起動の後の数え直しは不要である（子プロセスは起動役とともに終了する）。
+終了したプロセスの識別子と終了コードを記録し、起床の合図を出す。ワーカー用の常駐サービスは登録しない。再起動の後の数え直しは不要である（子プロセスは起動役とともに終了する）。
 
 ### D-6: Docker のバックエンド (FR-4, FR-8, FR-10)
 
 起動役は自身のコンテナを inspect して、次の内容でワーカーのコンテナを作る。
 
-| 項目         | 値                                                                     |
-| ------------ | ---------------------------------------------------------------------- |
-| イメージ     | 自身のイメージ ID（イメージ API を使わない）                           |
-| コマンド     | 固定 `["python3", "-u", "/workspace/main.py"]`                         |
-| 環境変数     | 自身の環境変数                                                         |
-| マウント     | `volumes_from=[自身]`                                                  |
-| ネットワーク | `network_mode=container:<自身>`                                        |
-| ラベル       | `ytdlp.role=worker`。実行中の数は、このラベルの一覧で数える            |
-| 終了時       | `auto_remove=True`。終了イベントを購読して終了コードを記録し、起床する |
+| 項目         | 値                                                                                     |
+| ------------ | -------------------------------------------------------------------------------------- |
+| イメージ     | 自身のイメージ ID（イメージ API を使わない）                                           |
+| コマンド     | 固定 `["python3", "-u", "/workspace/main.py"]`                                         |
+| 環境変数     | 自身の環境変数                                                                         |
+| マウント     | `volumes_from=[自身]`                                                                  |
+| ネットワーク | `network_mode=container:<自身>`                                                        |
+| ラベル       | `ytdlp.role=worker`。実行中の数は、このラベルの一覧で数える                            |
+| 終了時       | `auto_remove=True`。終了イベントを購読し、ラベルの識別子と終了コードを記録して起床する |
 
 停止時はラベルの一覧に `stop(timeout)` を呼ぶ。docker-socket-proxy には `CONTAINERS=1` `POST=1` `EVENTS=1` だけを許可し、`DOCKER_HOST=tcp://docker-proxy:2375` で接続する。docker.sock は直接マウントしない。
 

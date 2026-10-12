@@ -343,6 +343,8 @@ curl -H "Content-Type: application/json" -X POST "http://<IPアドレス>:5000/d
 
 HTTPS（nginx）の場合は URL を `https://<IPアドレス>/download` にし、`curl` に `-k` を付ける。
 
+保存先に同じ名前のファイルがあるときは、既存のファイルを上書きせず、名前の末尾に連番を付けて保存する（`動画.mp4` がある場合は `動画 (1).mp4`）。
+
 iOS ショートカットなどを作成すると楽に操作できる。
 
 <details><summary>image</summary>
@@ -470,7 +472,7 @@ cookie が未指定・未登録・失効しているときは、リクエスト�
 
 - cookie を更新すると、サーバを再起動しなくても `valid` に戻る。
 - キューに積んだ後で cookie が失効した場合は、ジョブが失敗し、ジョブ情報に `error_code=login_required` が入る。cookie を更新するまで自動リトライはしない。
-- `/download/scheduled` で 401 になった予約は、削除されずに残る。
+- `/download/scheduled` で 401 になった予約は、削除されずに残る。それ以外の理由で失敗した予約は、Redis の `ytdlp:requests:failed` に退避され、残りの予約は処理される（応答の `failed` が退避した件数）。
 
 ---
 

@@ -6,7 +6,9 @@
 - [x] T-1.1: ダウンロード、予約、予約実行、再実行のエンドポイントを実装する。
 - [x] T-1.2: options と auth_profile の検証を実装する。
 - [x] T-1.3: 再実行要求を項目単位の更新にし、取得済みのキーの再作成を防ぐ。
-- 検証: `node --test tests/spec-trace/api-server.test.mjs --test-name-pattern "AC-(1|2|3|4|11|14|15|18)\b"`
+- [x] T-1.4: 予約実行の失敗を、失敗用の予約リストへ退避して続行する。
+- [x] T-1.5: ジョブ ID に一意な値を付ける。
+- 検証: `node --test tests/spec-trace/api-server.test.mjs --test-name-pattern "AC-(1|2|3|4|5|12|15|16|17|20)\b"`
 
 ## Phase 2: ログイン要求と通知
 

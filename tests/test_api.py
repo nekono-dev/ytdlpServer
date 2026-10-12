@@ -203,6 +203,35 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(r.status_code, 401)
         self.assertEqual(len(self.redis.lists["ytdlp:requests"]), 1, "予約が失われない")
 
+    def test_failed_scheduled_request_is_moved_aside_and_rest_continues(self) -> None:
+        self.redis.lpop = lambda k: self.redis.lists[k].pop(0) if self.redis.lists.get(k) else None
+        for url in ("https://x/bad", "https://x/ok"):
+            self.client.post("/schedule", json={"url": url})
+        job = {"id": "a", "url": "https://x/ok", "options": []}
+
+        def probe(url: str, *_a: object, **_kw: object) -> list[dict]:
+            if url.endswith("bad"):
+                raise RuntimeError("boom")
+            return [job]
+
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", side_effect=probe):
+            r = self.client.post("/download/scheduled", json={})
+        self.assertEqual((r.status_code, r.json["count"], r.json["failed"]), (200, "1", "1"))
+        failed = self.redis.lists["ytdlp:requests:failed"]
+        self.assertEqual([json.loads(x)["url"] for x in failed], ["https://x/bad"])
+        self.assertEqual(self.redis.lists.get("ytdlp:requests", []), [])
+        self.assertEqual(len(self.redis.lists["ytdlp:queue"]), 1)
+
+    def test_same_url_twice_gets_distinct_job_ids(self) -> None:
+        out = json.dumps({"id": "v1", "title": "t", "webpage_url": "https://x/v1"})
+        with mock.patch("subprocess.run", return_value=mock.Mock(stdout=out + "\n")):
+            first = self.m.function.probe_and_build_jobs("https://x/1", [], None, None)
+            second = self.m.function.probe_and_build_jobs("https://x/1", [], None, None)
+        self.assertNotEqual(first[0]["id"], second[0]["id"])
+        self.assertTrue(first[0]["id"].startswith("v1-"))
+        self.assertEqual(first[0]["filename"], second[0]["filename"])
+        self.assertLessEqual(len(first[0]["id"].encode()), self.m.function.MAX_JOB_ID_BYTES)
+
     def test_profiles_endpoint_hides_content(self) -> None:
         r = self.client.get("/auth/profiles")
         self.assertEqual(r.status_code, 200)
