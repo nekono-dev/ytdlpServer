@@ -1,9 +1,9 @@
 #!/bin/sh
-# 責務: 頒布するインストーラ（`install.sh`）を、ひな形（install/install.sh.tmpl）へ REF・COMMIT・REPO_URL を埋め込んで標準出力へ出す。
-# CI（.github/workflows/installer.yml）が、ブランチ・タグごとに実行する。手元でも同じ手順で試せる。
-# 使い方: sh install/build-install.sh <REF> <COMMIT（40桁の16進）> <REPO_URL（https://・file://）> > install.sh
+# 責務: 頒布するインストーラ（`install.sh`）を、ひな形（installer/bootstrap.sh.tmpl）へ REF・COMMIT・REPO_URL を埋め込んで標準出力へ出す。
+# CI（.github/workflows/release-installer.yml）が、ブランチ・タグごとに実行する。手元でも同じ手順で試せる。
+# 使い方: sh installer/build-bootstrap.sh <REF> <COMMIT（40桁の16進）> <REPO_URL（https://・file://）> > install.sh
 # 失敗時: 引数の形式が不正（置換に使えない文字・桁数違い）、または置換漏れがあれば、何も出力せず終了コード1。
-# 例: sh install/build-install.sh v1.0.0 0123456789abcdef0123456789abcdef01234567 https://example.test/repo.git > install.sh
+# 例: sh installer/build-bootstrap.sh v1.0.0 0123456789abcdef0123456789abcdef01234567 https://example.test/repo.git > install.sh
 
 set -eu
 
@@ -29,7 +29,7 @@ case "$REPO_URL" in
 esac
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-OUT=$(sed "s|@@REF@@|$REF|; s|@@COMMIT@@|$COMMIT|; s|@@REPO_URL@@|$REPO_URL|" "$SCRIPT_DIR/install.sh.tmpl")
+OUT=$(sed "s|@@REF@@|$REF|; s|@@COMMIT@@|$COMMIT|; s|@@REPO_URL@@|$REPO_URL|" "$SCRIPT_DIR/bootstrap.sh.tmpl")
 
 # 置換漏れの検査（ひな形の説明文にある文字列は除き、代入行だけを見る）。
 if printf '%s\n' "$OUT" | grep -q "^\(REF\|COMMIT\|REPO_URL\)='@@"; then

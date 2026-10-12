@@ -7,7 +7,7 @@
 1. （任意）[保存先に NAS を使う](#保存先に-nas-を使う任意)
 2. 導入方法を選んで導入する
    - [Docker Compose で使う](#docker-compose-で使う)
-   - [Alpine Linux (LXC/ベアメタル) で使う](#alpine-linux-lxcベアメタル-で使う)
+   - [Ubuntu (LXC/ベアメタル) で使う](#ubuntu-lxcベアメタル-で使う)
 3. [動画をダウンロードする](#動画をダウンロードする)
 
 ---
@@ -18,10 +18,7 @@
 以降、保存先は `/mnt/video` として記載する。
 
 ```sh
-## Ubuntu
 sudo apt install cifs-utils
-## Alpine
-apk add cifs-utils
 
 sudo mkdir -p /mnt/video
 ```
@@ -142,21 +139,21 @@ docker-compose -f <ファイル> down
 
 ---
 
-## Alpine Linux (LXC/ベアメタル) で使う
+## Ubuntu (LXC/ベアメタル) で使う
 
-Alpine Linux 3.21 に Docker なしでインストールする。
+Ubuntu 24.04 に Docker なしでインストールする。インストーラは 1 行の取得実行コマンドで導入でき、導入後は常設コマンド `ytdlpserver-ctl` で更新・撤去・状態確認を行う。
 
 ### インストール
 
 #### 1. 実行環境を用意する
 
-メモリは **1GB 以上**を割り当てる（pot-provider の `npm ci` と canvas のビルドに必要。128MB 程度ではほぼ完了しない）。ディスクは 4GB 以上を推奨する。ログイン用ブラウザ（既定で有効）を使う場合は、メモリ 2GB 以上・ディスクの空き 1GB 以上を推奨する（[詳細](#ログイン用ブラウザの設定)）。Redis Insight をビルドする場合は、ビルド時のみ追加の要件がある（[Redis の Web UI](#redis-web-uiの設定)を参照）。
+メモリは **1GB 以上**を割り当てる（pot-provider のビルドに必要）。ディスクは 4GB 以上を推奨する。ログイン用ブラウザ（既定で有効）を使う場合は、メモリ 2GB 以上・ディスクの空き 1GB 以上を推奨する（[詳細](#ログイン用ブラウザの設定)）。Redis Insight をビルドする場合は、ビルド時のみ追加の要件がある（[Redis の Web UI](#redis-web-uiの設定)を参照）。
 
 **LXC の場合**、コンテナを作成してシェルに入る。
 
 ```sh
-lxc launch images:alpine/3.21 ytdlp
-lxc exec ytdlp -- sh
+lxc launch ubuntu:24.04 ytdlp
+lxc exec ytdlp -- bash
 ```
 
 保存先にホストのディレクトリ（[NAS](#保存先に-nas-を使う任意) など）を使う場合は、ホスト側で実行する。
@@ -167,188 +164,171 @@ lxc config device add ytdlp video disk source=/mnt/video path=/mnt/video
 lxc config device set ytdlp video shift=true
 ```
 
-**ベアメタルの場合**、Alpine に root でログインする。
+**ベアメタルの場合**、Ubuntu 24.04 に root（または sudo）で操作する。
 
-#### 2. インストーラを取得する
+#### 2. インストールする
 
-コンテナ内（ベアメタルは Alpine 上）で実行する。
-
-```sh
-wget -O install.sh https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh
-```
-
-#### 3. 設定してインストールする
-
-環境変数に設定値を指定して実行する。指定した値は `/etc/conf.d/ytdlpserver` に保存される。
+コンテナ内（ベアメタルは Ubuntu 上）で実行する。
 
 ```sh
-WORKER_MAX=4 DOWNLOAD_DIR=/mnt/video sh install.sh
+curl -fsSL https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh | sudo sh -s -- install
 ```
 
-初回は数分かかる。完了すると API の URL が表示される。
+設定値は `--set KEY=VALUE` で指定する。指定した値は `/etc/ytdlpserver/ytdlpserver.env`（権限 600）に保存される。
 
-設定値はすべて省略可。全項目は `sh install.sh --help` でも確認できる。
+```sh
+curl -fsSL https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh | sudo sh -s -- install --set WORKER_MAX=4 --set DOWNLOAD_DIR=/mnt/video
+```
 
-| 環境変数               | 既定値                   | 内容                                                                               |
-| ---------------------- | ------------------------ | ---------------------------------------------------------------------------------- |
-| DOWNLOAD_DIR           | `/mnt`                   | 動画の保存先                                                                       |
-| COOKIE_DIR             | `$INSTALL_DIR/cookies`   | cookie プロファイル（ログインセッション）の保存先                                  |
-| WORKER_MAX             | `1`                      | 同時に動く worker の最大数（旧 `WORKER_COUNT` を別名として引き継ぐ）               |
-| API_PORT               | `5000`                   | API のポート                                                                       |
-| POT_PORT               | `4416`                   | PO Token プロバイダのポート（127.0.0.1 限定）                                      |
-| REDIS_TTL              | `604800`                 | redis のジョブ情報の保持期間（秒）                                                 |
-| RETRY_COUNT            | `5`                      | ダウンロードのリトライ回数                                                         |
-| YTDLP_REPO             | `yt-dlp/yt-dlp`          | yt-dlp の取得元（GitHub リポジトリ）                                               |
-| UPDATE_INTERVAL        | `21600`                  | yt-dlp の新版の確認間隔（秒）                                                      |
-| UPDATE_RETRY_INTERVAL  | `1800`                   | 確認・適用に失敗した後の再確認の間隔（秒）                                         |
-| UPDATE_COOLDOWN        | `1800`                   | probe 失敗による確認依頼の最短間隔（秒）                                           |
-| KEEP_VERSIONS          | `2`                      | 導入先に残す yt-dlp の版数                                                         |
-| DISPATCH_SCAN_INTERVAL | `30`                     | dispatcher がジョブを定期確認する間隔（秒）                                        |
-| LEASE_TTL              | `60`                     | worker の生存確認（リース）の有効期間（秒）                                        |
-| HEARTBEAT_INTERVAL     | `10`                     | worker がリースを更新する間隔（秒）                                                |
-| STOP_GRACE             | `20`                     | 停止指示から yt-dlp を強制終了するまでの猶予（秒）                                 |
-| INPROGRESS_STALE       | `21600`                  | 所有者不明の in_progress ジョブを回収するまでの時間（秒）                          |
-| INSTALL_DIR            | `/opt/ytdlpserver`       | ソースの取得先（`install.sh` がここへ clone する）。venv 等もこの直下に展開される  |
-| WITH_NGINX             | `0`                      | `1` で HTTPS（nginx）を有効化。[詳細](#httpsnginx)                                 |
-| SSL_CN                 | `localhost`              | 自己署名証明書の CN。[詳細](#httpsnginx)                                           |
-| WITH_CLOUDFLARED       | `0`                      | `1` で Cloudflare Tunnel を有効化。[詳細](#cloudflare-tunnel)                      |
-| CLOUDFLARE_TOKEN       | なし                     | Cloudflare Tunnel のトークン（`WITH_CLOUDFLARED=1` で必須）                        |
-| WITH_REDIS_INSIGHT     | `1`                      | `1` で Redis◊ の Web UI（5540）を有効化。[詳細](#redis-web-uiの設定)               |
-| REDIS_UI               | `insight`                | Web UI の種類（`insight` / `commander`）。[詳細](#redis-web-uiの設定)              |
-| REDIS_INSIGHT_VERSION  | `3.8.0`                  | ビルドする Redis Insight のタグ。[詳細](#redis-web-uiの設定)                       |
-| RI_BUILD_STORAGE       | `auto`                   | Redis Insight のビルド先（`auto` / `tmpfs` / `disk`）。[詳細](#redis-web-uiの設定) |
-| REDIS_UI_HOST          | `0.0.0.0`                | Web UI の待ち受けアドレス                                                          |
-| WITH_BROWSER           | `1`                      | `1` でログイン用ブラウザ（Chromium）を有効化。[詳細](#ログイン用ブラウザの設定)    |
-| BROWSER_PORT           | `8080`                   | ログイン用ブラウザ画面のポート                                                     |
-| BROWSER_UI_URL         | サーバの IP から自動検出 | 401 応答の `login_url` に使う URL。[詳細](#ログイン用ブラウザの設定)               |
-| SESSION_TIMEOUT        | `900`                    | ログインセッションの自動終了までの秒数                                             |
-| BROWSER_LANG           | `ja,en-US,en`            | ログイン用ブラウザの言語設定                                                       |
-| BROWSER_TZ             | `Asia/Tokyo`             | ログイン用ブラウザのタイムゾーン                                                   |
+初回は数分かかる。完了すると API の URL が表示される。`install` は何度実行しても同じ結果になる。
+
+- 値の優先順位は、`--set` > 環境変数 > 既存の設定ファイル > 既定値。既存の設定ファイルの値は、`--set` か環境変数で指定しない限り変更されない。
+- 受け付けるのは下表のキーだけ。未宣言のキーや、`'`・改行を含む値はエラーになる（何も変更されない）。
+- `--set` の値は `ps` やシェル履歴に残る。`CLOUDFLARE_TOKEN` のような秘匿値は、環境変数（`sudo env CLOUDFLARE_TOKEN=... sh -s -- install ...`）か、設定ファイルへの直接記入で渡す。
+- 取得先（ソースの展開先）は環境変数 `YTDLPSERVER_DIR` で変更できる（既定 `/opt/ytdlpserver`、`install` 時のみ）。venv などはこの直下に展開され、`uninstall` で削除される。
+
+| 設定キー | 既定値 | 内容 |
+| --- | --- | --- |
+| DOWNLOAD_DIR | `/mnt` | 動画の保存先 |
+| COOKIE_DIR | `/var/lib/ytdlpserver/cookies` | cookie プロファイルの保存先 |
+| WORKER_MAX | `1` | 同時に動く worker の最大数 |
+| API_PORT | `5000` | API の待ち受けポート |
+| POT_PORT | `4416` | pot-provider の待ち受けポート（127.0.0.1 限定） |
+| REDIS_TTL | `604800` | ジョブ情報の保持秒数 |
+| RETRY_COUNT | `5` | ダウンロードの再試行回数 |
+| YTDLP_REPO | `yt-dlp/yt-dlp` | yt-dlp の取得元 GitHub リポジトリ |
+| UPDATE_INTERVAL | `21600` | yt-dlp の新版の確認間隔（秒） |
+| UPDATE_RETRY_INTERVAL | `1800` | 確認失敗後の再確認間隔（秒） |
+| UPDATE_COOLDOWN | `1800` | probe 失敗による確認依頼の最短間隔（秒） |
+| KEEP_VERSIONS | `2` | 導入先に残す yt-dlp の版数 |
+| DISPATCH_SCAN_INTERVAL | `30` | dispatcher がジョブを定期確認する間隔（秒） |
+| LEASE_TTL | `60` | worker のリースの有効期間（秒） |
+| HEARTBEAT_INTERVAL | `10` | worker がリースを更新する間隔（秒） |
+| STOP_GRACE | `20` | 停止指示から強制終了までの猶予（秒） |
+| INPROGRESS_STALE | `21600` | 所有者不明の処理中ジョブを回収するまでの秒数 |
+| WITH_BROWSER | `1` | 1 でログイン用ブラウザを導入する |
+| BROWSER_PORT | `8080` | ログイン操作画面のポート |
+| BROWSER_UI_URL | なし | login_url の基準 URL（空なら外向き IP から組み立てる） |
+| SESSION_TIMEOUT | `900` | ログイン操作の自動終了までの秒数 |
+| BROWSER_LANG | `ja,en-US,en` | ブラウザの言語 |
+| BROWSER_TZ | `Asia/Tokyo` | ブラウザのタイムゾーン |
+| WITH_NGINX | `0` | 1 で nginx（443、自己署名証明書）を導入する |
+| SSL_CN | `localhost` | 自己署名証明書の CN |
+| WITH_CLOUDFLARED | `0` | 1 で cloudflared を導入する |
+| CLOUDFLARE_TOKEN | なし | Cloudflare Tunnel のトークン |
+| WITH_REDIS_UI | `1` | 1 で Redis の Web UI を導入する |
+| REDIS_UI | `insight` | insight または commander |
+| REDIS_INSIGHT_VERSION | `3.8.0` | ビルドする Redis Insight のタグ |
+| RI_BUILD_STORAGE | `auto` | ビルド先（tmpfs・disk・auto） |
+| REDIS_UI_HOST | `0.0.0.0` | Web UI の待ち受けアドレス |
 
 例: HTTPS を追加し、Redis の Web UI は軽量な commander にする。
 
 ```sh
-WITH_NGINX=1 REDIS_UI=commander sh install.sh
+curl -fsSL https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh | sudo sh -s -- install --set WITH_NGINX=1 --set REDIS_UI=commander
 ```
 
 ##### HTTPS（nginx）の設定
 
 `WITH_NGINX=1` で nginx（443）を導入し、HTTPS を有効にする。自己署名証明書を使い、証明書の CN は `SSL_CN=<ホスト名>` で指定する。
 
-API の URL は `https://<IPアドレス>/download` になる。
+API の URL は `https://<IPアドレス>/download` になる。`WITH_NGINX=0` に戻して `update` すると、nginx の設定が撤去され、nginx は停止する。
 
 ##### Cloudflare Tunnelの設定
 
-`WITH_CLOUDFLARED=1 CLOUDFLARE_TOKEN=<トークン>` で Cloudflare Tunnel を有効にする。
+`WITH_CLOUDFLARED=1` と `CLOUDFLARE_TOKEN=<トークン>` で Cloudflare Tunnel を有効にする（トークンは環境変数で渡すとよい）。
 
 - インストール時に、GitHub Releases から cloudflared の最新版を取得し、GitHub API が返すダイジェスト（sha256）と照合してから導入する。
 
 ##### Redis Web UIの設定
 
-`WITH_REDIS_INSIGHT=1`（既定で有効）で Redis の Web UI を導入する。アクセス先は `http://<IPアドレス>:5540`。`REDIS_UI_HOST` で待ち受けアドレスを変更できる。
+`WITH_REDIS_UI=1`（既定で有効）で Redis の Web UI を導入する。アクセス先は `http://<IPアドレス>:5540`。`REDIS_UI_HOST` で待ち受けアドレスを変更できる。
 
 - `REDIS_UI=commander` を指定すると、最初から軽量な redis-commander を使う。
 - Redis Insight は SSPL ライセンスのため、ビルド済みバイナリは配布しない。インストーラーが公式 GitHub のソース（`REDIS_INSIGHT_VERSION` のタグ）を取得し、その場でビルドする。
-  - 要件: メモリ 2GB 以上、Node.js 24 以上（Alpine 3.23 以降）、初回の所要時間は約 6 分（ビルド済みなら再実行時はスキップ）
+  - 要件: メモリ 2GB 以上、初回の所要時間は約 6 分（ビルド済みなら再実行時はスキップ）
   - 要件を満たさない場合やビルドに失敗した場合は、警告を出して redis-commander で継続する
 - **ビルド中はピークで約 9.5GB の作業領域を使う**（ソースと `node_modules` 約 3.3GB、yarn キャッシュ約 5.7GB）。作業領域はビルド後にすべて削除され、残るのは約 0.3GB のみ。置き場所は `RI_BUILD_STORAGE` で選ぶ。
 
-| `RI_BUILD_STORAGE` | 作業領域                                                    | 必要な資源                                                                                |
-| ------------------ | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `auto`（既定）     | メモリが足りれば tmpfs、足りない・マウントできなければ disk | 下記のいずれか                                                                            |
-| `tmpfs`            | メモリ上（tmpfs）                                           | **インストール時のみ メモリ 12GB 程度**。ディスクは使わない。ビルド後にメモリは解放される |
-| `disk`             | ディスク                                                    | **空き容量 10GB 程度**（ビルド中のみ）                                                    |
+| `RI_BUILD_STORAGE` | 作業領域 | 必要な資源 |
+| --- | --- | --- |
+| `auto`（既定） | メモリが足りれば tmpfs、足りない・マウントできなければ disk | 下記のいずれか |
+| `tmpfs` | メモリ上（tmpfs） | **インストール時のみ メモリ 12GB 程度**。ディスクは使わない。ビルド後にメモリは解放される |
+| `disk` | ディスク | **空き容量 10GB 程度**（ビルド中のみ） |
 
-- LXC の Proxmox でメモリ 2GB・ディスク 2GB のような小さなコンテナに入れる場合は、インストール時だけメモリを増やして（`pct set <CTID> -memory 12288`）`RI_BUILD_STORAGE=tmpfs` でビルドし、完了後に元のメモリへ戻せる。ディスクを増やせるなら `RI_BUILD_STORAGE=disk` でもよい。
 - tmpfs をマウントできない環境（権限のない LXC など）では、`auto` は disk にフォールバックし、`tmpfs` を明示した場合は警告を出して commander で継続する。
-
-例: ディスクを使わず、メモリ上でビルドする。
-
-```sh
-RI_BUILD_STORAGE=tmpfs sh install.sh
-```
 
 ##### ログイン用ブラウザの設定
 
-`WITH_BROWSER=1`（既定で有効）で、ログインが必要なサイトの cookie を取得するためのブラウザ（Chromium）を導入する。詳しい使い方は[ログインが必要な動画を取得する](#ログインが必要な動画を取得する)を参照。
+`WITH_BROWSER=1`（既定で有効）で、ログインが必要なサイトの cookie を取得するためのブラウザ（Chromium）を導入する。Ubuntu の `chromium` パッケージは snap のため、Playwright が配布する Chromium を `/opt/ytdlpserver/browsers` に導入する。詳しい使い方は[ログインが必要な動画を取得する](#ログインが必要な動画を取得する)を参照。
 
-- 要件: メモリ 2GB 以上・ディスクの空き 1GB 以上を推奨（導入自体は約 0.8GB、ログイン中の Chromium はピークで 1.5GB 程度のメモリを使う）。
-  満たさない場合は、`WITH_BROWSER=1` を明示していなければ自動で無効化（警告を出したうえで継続）し、明示している場合は警告のみ出して続行する。
+- 要件: メモリ 2GB 以上・ディスクの空き 1GB 以上を推奨（ログイン中の Chromium はピークで 1.5GB 程度のメモリを使う）。
+  満たさない場合は、`WITH_BROWSER` を明示していなければ自動で無効化（警告を出したうえで継続）し、明示している場合は警告のみ出して続行する。
 - アクセス先は `http://<IPアドレス>:8080`。`BROWSER_PORT` でポートを変更できる。
 - `BROWSER_UI_URL`（401 応答の `login_url` に使う URL）は、サーバの外向き IP から自動で組み立てられる。手動で指定する場合や、nginx・Cloudflare Tunnel 経由で公開する場合は明示する。
 - 画面（8080）に認証は無い。LAN 内だけで使い、ポートを外部へ公開しない。Cloudflare Tunnel の対象にも含めない。
 - 不要な場合は `WITH_BROWSER=0` で無効化する。
 
-#### 4. 動作確認する
+#### 3. 動作確認する
 
 ```sh
-rc-status
-wget -S -O /dev/null http://127.0.0.1:5000/download
+systemctl status ytdlpserver-api ytdlpserver-dispatcher
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:5000/download
 ```
 
-`405 METHOD NOT ALLOWED` が返れば API は動作している。
+`405` が返れば API は動作している。
 
-### 設定を変更する方法
+### 設定を変更・更新する方法
 
-環境変数を指定して再実行する（変更する項目だけ指定すればよい。指定しない項目は前回の値のまま）。
+導入後は `ytdlpserver-ctl` を使う（`curl` は不要）。
 
 ```sh
-WORKER_MAX=8 sh install.sh
+## 設定を変えて再適用する（変更する項目だけ指定すればよい）
+sudo ytdlpserver-ctl update --set WORKER_MAX=8
+
+## 任意機能の有効・無効を切り替える
+sudo ytdlpserver-ctl update --set WITH_NGINX=1
+sudo ytdlpserver-ctl update --set WITH_NGINX=0
+
+## 導入時のブランチ・タグの最新へ更新する（設定・cookie・Redis のデータは維持される）
+sudo ytdlpserver-ctl update
+
+## 導入情報（導入先・REF・コミット・取得元・更新日時）
+ytdlpserver-ctl status
 ```
 
-`/etc/conf.d/ytdlpserver` を直接編集してから再実行してもよい。
+`/etc/ytdlpserver/ytdlpserver.env` を直接編集してから `sudo ytdlpserver-ctl update` を実行してもよい。
 
-```sh
-vi /etc/conf.d/ytdlpserver
-sh install.sh
-```
-
-バージョンアップする場合は、最新のインストーラを取得して再実行する。設定・cookie（ログインセッション）・Redis のデータは維持される。
-
-```sh
-wget -O install.sh https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh
-sh install.sh
-```
-
-- `install.sh` はビルド時のコミットに固定されている（ブランチ・タグの付け替えとは食い違わない）ため、更新のたびに取得し直す。
-- `REDIS_INSIGHT_VERSION` など、リリースに追従させる項目は、環境変数で明示しない限り新しいインストーラの既定値へ自動で切り替わる（保存済みの値に固定され続けることはない）。
-- 使われなくなった設定（旧バージョンの名残）は、実行時に警告を出したうえで自動的に削除される。
-- 大きくバージョンをまたぐ場合や、通常のアップデートでうまくいかない場合は、下記の[アンインストール](#アンインストールする方法)を挟んでから新しいインストーラを実行する。
+- `ytdlpserver-ctl update` は、導入時の REF（ブランチ・タグ）の最新を取得して再適用する。`install.sh` を使った `update` は、その `install.sh` のコミットへ揃える。
+- `update` では、設定スキーマに新しく増えたキーが既定値で追記される。既存の値は変わらない。
 
 状態を見る・ログを見る・再起動する。
 
 ```sh
-rc-status
+systemctl status ytdlpserver-api
 
-tail -f /var/log/ytdlp-api.log
+journalctl -u ytdlpserver-api -f
 
-rc-service ytdlp-api restart
-rc-service ytdlp-dispatcher restart
+systemctl restart ytdlpserver-api ytdlpserver-dispatcher
 ```
 
-サービス名: `ytdlp-pot` / `ytdlp-api` / `ytdlp-dispatcher`（worker はここから起動される） / `redis` / `nginx` / `ytdlp-cloudflared` / `ytdlp-redis-ui` / `ytdlp-browser`
-
-追加した機能を止める場合は、サービスを停止して無効にする。
-
-```sh
-rc-service nginx stop
-rc-update del nginx
-```
+サービス名: `ytdlpserver-pot` / `ytdlpserver-api` / `ytdlpserver-dispatcher`（worker はここから起動される） / `redis-server` / `nginx` / `ytdlpserver-cloudflared` / `ytdlpserver-redis-ui` / `ytdlpserver-browser`
 
 ### アンインストールする方法
 
-`--uninstall` は、アプリ本体（venv・pot-provider・yt-dlp・Redis Insight・OpenRC サービス）だけを削除する。ソース（取得先の `INSTALL_DIR`）・設定（`/etc/conf.d/ytdlpserver`）・cookie・Redis のデータ（ジョブキュー）・動画の保存先はそのまま残る。
+`uninstall` は、アプリ本体（サービス・常設コマンド・取得先）を削除する。設定（`/etc/ytdlpserver`）・cookie・Redis のデータ（ジョブキュー）・動画の保存先はそのまま残るため、再度 `install` すると設定を引き継げる。
 
 ```sh
-sh install.sh --uninstall
+sudo ytdlpserver-ctl uninstall
 ```
 
-続けて新しいインストーラを実行すれば、設定を引き継いで安全にバージョンアップできる。
+`--purge` を付けると、設定・cookie・Redis のデータ・導入メタ情報も削除する。**動画の保存先は `--purge` でも削除されない**。
 
 ```sh
-wget -O install.sh https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh
-sh install.sh
+sudo ytdlpserver-ctl uninstall --purge
 ```
+
+- apt で導入したパッケージ（redis-server・nginx・ffmpeg など）は削除しない。
 
 ---
 
@@ -426,7 +406,7 @@ curl -H "Content-Type: application/json" -X POST "http://<IPアドレス>:5000/d
 ```
 
 - `options` の `-u` / `-p`（`--username` / `--password`）、`--cookies`、`--netrc*` は使えない（400 になる）。
-- cookie は `<プロファイル名>.txt` として保存される。保存先は Docker Compose では `cookies/`、Alpine では `/opt/ytdlpserver/cookies/`（`COOKIE_DIR` で変更可）。
+- cookie は `<プロファイル名>.txt` として保存される。保存先は Docker Compose では `cookies/`、Ubuntu インストーラでは `/var/lib/ytdlpserver/cookies/`（`COOKIE_DIR` で変更可）。
   cookie はパスワードと同じ扱いにし、他人に渡さず、Git にもコミットしない（`cookies/` は `.gitignore` 済み）。
 - ログインには、普段使いとは別のアカウントを使うことを勧める（サイトによっては、別環境での cookie の利用でアカウントが保護・制限されることがある）。
 
@@ -435,7 +415,7 @@ curl -H "Content-Type: application/json" -X POST "http://<IPアドレス>:5000/d
 ブラウザでログインするだけで、cookie がプロファイルとして保存される。cookies.txt を書き出す必要はない。
 スマートフォンでも PC でも使える。サーバ上のブラウザの画面が、この端末の画面の大きさで表示される。
 
-Alpine インストーラは既定でこの機能を導入し（[詳細](#ログイン用ブラウザの設定)）、`BROWSER_UI_URL` もサーバの IP から自動で設定される。Docker Compose の場合は、下記の手順が必要。
+Ubuntu インストーラは既定でこの機能を導入し（[詳細](#ログイン用ブラウザの設定)）、`BROWSER_UI_URL` もサーバの IP から自動で設定される。Docker Compose の場合は、下記の手順が必要。
 
 1. （推奨・Docker Compose のみ）`.env` に `BROWSER_UI_URL=http://<サーバのIPアドレス>:8080` を書いて、起動し直す。
    401 の `login_url` から、この画面を開けるようになる。
@@ -531,8 +511,8 @@ yt-dlp が対応していない URL・動画である可能性がある。しば
 ```sh
 ## Docker Compose
 docker-compose -f <ファイル> restart pot-provider
-## Alpine
-rc-service ytdlp-pot restart
+## Ubuntu
+systemctl restart ytdlpserver-pot
 ```
 
 ### `client and server have different API versions`（Docker Compose）
@@ -547,8 +527,8 @@ rc-service ytdlp-pot restart
   }
 ```
 
-### インストーラが途中で失敗する（Alpine）
+### インストーラが途中で失敗する（Ubuntu）
 
 - `github.com` に接続できるか確認する。
-- もう一度 `sh install.sh` を実行する（途中からやり直せる）。
-- サービスが起動しない場合は `/var/log/ytdlp-<サービス名>.log` を確認する。
+- もう一度 `install` を実行する（途中からやり直せる）。
+- サービスが起動しない場合は `journalctl -u ytdlpserver-<サービス名>` を確認する。

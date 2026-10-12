@@ -12,7 +12,7 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 - [API 仕様](#api-仕様)
 - [Redis のデータ構造](#redis-のデータ構造)
 - [実装上のポイント](#実装上のポイント)
-- [Alpine インストーラ](#alpine-インストーラ)
+- [Ubuntu インストーラ](#ubuntu-インストーラ)
 - [CI](#ci)
 - [テスト](#テスト)
 - [Lint](#lint)
@@ -55,14 +55,12 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 | `*/src/cookies.py`・`*/src/presets.json`                                   | cookie プロファイルの共通処理と、プリセットの定義（API・Worker・browserServer で**同一内容**。一部だけ直さない） |
 | [browserServer/](browserServer/)                                           | ログイン用ブラウザ（Chromium、画面は CDP で配信）と cookie 回収。`src/main.py`（操作画面・制御 API・WebSocket、aiohttp）、`src/session.py`（状態管理）、`src/browser.py`（ブラウザ制御・画面配信・入力）、`src/netscape.py`（cookie の絞り込み・変換） |
 | [tests/](tests/)                                                           | 単体テスト（標準 `unittest`）                                     |
-| [specs/](specs/)                                                           | 要件・設計・タスク（仕様駆動開発）。全体用と、アプリ別（`apiServer/` `workerServer/` `browserServer/`） |
+| [specs/](specs/)                                                           | 要件・設計・タスク（仕様駆動開発）。全体用と、アプリ別（`apiServer/` `workerServer/` `browserServer/`）、`installer/`、`ytdlp-binary/` |
 | `*/yt-dlp.conf`                                                            | イメージ内の `/etc/yt-dlp.conf` になる yt-dlp 共通設定            |
 | [nginx/](nginx/)                                                           | HTTPS 構成用の nginx イメージ                                     |
 | [docker-compose.yml](docker-compose.yml)                                   | 基本構成（HTTP）。`.nginx.yml` / `.cloudflare.yml` は派生構成     |
-| [install/install.sh.tmpl](install/install.sh.tmpl)                         | 頒布される `install.sh` のひな形（git 等の導入・ソース取得のみを行う薄い層） |
-| [install/build-install.sh](install/build-install.sh)                       | ひな形へ REF・COMMIT・REPO_URL を埋め込み `install.sh` を生成する |
-| [install/setup.sh](install/setup.sh)                                       | 本体インストーラ（Docker 無しの Alpine 向け）                     |
-| [.github/workflows/installer.yml](.github/workflows/installer.yml)         | インストーラの配布用 CI                                           |
+| [installer/](installer/)                                                   | Ubuntu 向けインストーラ一式（ひな形・生成スクリプト・本体・設定スキーマ・systemd ユニット）。仕様は `specs/installer/` |
+| [.github/workflows/release-installer.yml](.github/workflows/release-installer.yml) | インストーラの配布用 CI                                   |
 | [MEMO.md](MEMO.md)                                                         | yt-dlp のオプションに関するメモ                                   |
 
 ## 開発環境の準備
@@ -95,10 +93,10 @@ docker run --rm -d --name redisinsight -p 5540:5540 redis/redisinsight:latest
 起動後、`http://localhost:5540` で Redis（`host.docker.internal` またはホストの IP、ポート 6379）を登録する。
 キーは `ytdlp:queue`（ジョブキュー）と `ytdlp:jobs:<status>:<job_id>`（ジョブ状態）を見る。
 
-Alpine 向けインストーラー（`install/setup.sh`）は、コンテナを使わずに Redis Insight を動かす。
+Ubuntu 向けインストーラー（`installer/app.sh`）は、コンテナを使わずに Redis Insight を動かす。
 Redis Insight は SSPL のためビルド済みバイナリを再配布せず、公式 GitHub のタグのソースをインストール先でビルドする。
 手順は公式 Dockerfile と同じ（3.8.0 は yarn、それ以降の版は npm に移行済みのため `yarn.lock` の有無で分岐する）。
-詳細は [Alpine インストーラ](#alpine-インストーラ) を参照。
+詳細は [Ubuntu インストーラ](#ubuntu-インストーラ) を参照。
 
 ## ローカルでの起動
 
@@ -367,35 +365,37 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 - bgutil の yt-dlp プラグインは `/etc/yt-dlp/plugins/bgutil`（標準の置き場）に配置する。バイナリ版 yt-dlp は
   pip 環境の `yt_dlp_plugins` を自動検出しないため。
 
-## Alpine インストーラ
+## Ubuntu インストーラ
 
-[install/](install/) は、Docker を使わず Alpine Linux へ全構成を導入する冪等なインストーラ一式。2層構成で、役割分担は変えない（[.claude/bootstrap-ci-builder/SKILL.md](.claude/bootstrap-ci-builder/SKILL.md) 参照）。
+[installer/](installer/) は、Docker を使わず Ubuntu 24.04（ベアメタル・LXC）へ全構成を導入する冪等なインストーラ一式。仕様は [specs/installer/](specs/installer/) にあり、構成と役割分担はホスト側のスキル `bootstrap-ci-builder` の方式に従う。
 
 | ファイル | 役割 |
 | --- | --- |
-| `install/install.sh.tmpl` | 頒布される `install.sh` のひな形。git・ca-certificates の導入と、埋め込まれたコミット（`@@COMMIT@@`）のソース取得だけを行う薄い層。取得後、同じコミットの `install/setup.sh` へ引数をそのまま渡して実行する |
-| `install/build-install.sh` | `install.sh.tmpl` へ REF・COMMIT・REPO_URL を埋め込み、標準出力へ `install.sh` を出す生成スクリプト |
-| `install/setup.sh` | 実際の導入・アンインストール処理を行う本体インストーラ |
+| `installer/bootstrap.sh.tmpl` | 頒布される `install.sh` のひな形。git・ca-certificates の導入と、埋め込まれたコミットのソース取得だけを行う薄い層。取得後、同じコミットの `installer/main.sh` へサブコマンドと引数を渡して実行する |
+| `installer/build-bootstrap.sh` | ひな形へ REF・COMMIT・REPO_URL を埋め込み、標準出力へ `install.sh` を出す生成スクリプト |
+| `installer/main.sh` | 本体。`install` / `update` / `uninstall [--purge]` / `status`、設定の検証・反映、導入メタ情報、常設コマンド `ytdlpserver-ctl` の配置を行う。プロジェクト固有の処理はフック 3 つ（`app_install`・`app_uninstall`・`app_purge`）に限り、`app.sh` を呼ぶ |
+| `installer/config.schema` | 設定キーの宣言（キー名・既定値・必須か・説明）。`--set`・環境変数で受け付けるのは宣言したキーだけ |
+| `installer/app.sh` | アプリ固有の導入・撤去処理 |
+| `installer/run/*.sh` | systemd ユニットの起動ラッパー。設定ファイルを読み、アプリ用の環境変数へ写して起動する |
+| `installer/units/*.service` | systemd ユニットのひな形（`@@DIR@@` を取得先に置換して配置する） |
+| `installer/build-redisinsight.sh` | Redis Insight のビルド手順 |
 
-利用者は Release から `install.sh` を取得して実行するだけでよく、`install/setup.sh` を直接意識する必要はない（[README.md](README.md) 参照）。
+利用者は Release から `install.sh` を取得して実行するだけでよい（[README.md](README.md) 参照）。
 
-- 設定は環境変数で上書きでき、`/etc/conf.d/ytdlpserver` に保存される。再実行時は保存済みの値を引き継ぐ（優先順位: 環境変数 > 保存済み > 既定値）。
-- 環境変数の一覧は `sh install/setup.sh --help` で確認できる。
-- `--uninstall` でアプリ本体だけを削除できる（設定・cookie・Redis のデータ・動画の保存先は残す）。旧バージョンの安全なアンインストール + 新バージョンの導入に使う。
-- ソースは `INSTALL_DIR`（既定 `/opt/ytdlpserver`）そのもの。`install.sh` がここへ git clone し、直下の `install/setup.sh` を実行する。
-  venv・bin・pot-provider・redisinsight・ytdlp・cookies は、その兄弟ディレクトリとして展開する（いずれも `.gitignore` 済み）。Python は venv（`--system-site-packages`）に入れる。
-- yt-dlp は `YTDLP_DIR`（既定 `$INSTALL_DIR/ytdlp`）へ GitHub Releases から導入し、`current` を Redis と同様に更新する。
-  bgutil プラグインは `/etc/yt-dlp/plugins/bgutil` に配置する。
-- Redis / pot-provider / API / dispatcher は OpenRC サービスとして登録する。pot-provider と Redis は `127.0.0.1` に限定する。
-  worker は dispatcher の子プロセスとして起動される（OpenRC サービスとしては登録しない）。
-- 任意で nginx（HTTPS）、cloudflared、Redis の Web UI を導入する。
-- ログイン用ブラウザ（Chromium、`ytdlp-browser`）は `WITH_BROWSER=1` で既定で導入する。Alpine には musl 向けの `chromium` apk がそのまま使えるため、Redis Insight と違いその場でのビルドは不要。
-  導入時にメモリ・ディスクの空きを確認し、閾値（メモリ 2048MB / ディスク空き 1024MB）未満なら、`WITH_BROWSER=1` が明示されていない限り自動で無効化する（Redis Insight のビルド失敗時に `redis-commander` へフォールバックするのと同じ考え方）。
+- 設定は `/etc/ytdlpserver/ytdlpserver.env`（権限 600）に保存される。優先順位は `--set` > 環境変数 > 既存の設定ファイル > 既定値。
+- ソースは `YTDLPSERVER_DIR`（既定 `/opt/ytdlpserver`）そのもの。`install.sh` がここへ git clone し、直下の `installer/main.sh` を実行する。
+  venv・pot-provider・ytdlp・redisinsight・browsers・bin は、その兄弟ディレクトリとして展開する（いずれも `.gitignore` 済み）。`uninstall` は取得先ごと削除する。
+- cookie の保存先は `/var/lib/ytdlpserver/cookies`、導入メタ情報は `/var/lib/ytdlpserver-installer/state`。`uninstall` では残し、`--purge` で削除する。動画の保存先は `--purge` でも削除しない（そのため `DOWNLOAD_DIR` は `/var/lib/ytdlpserver` の配下にできない）。
+- yt-dlp は `$YTDLPSERVER_DIR/ytdlp` へ GitHub Releases から導入し、`current` を更新する（glibc は `yt-dlp_linux`、musl は `yt-dlp_musllinux`）。bgutil プラグインは `/etc/yt-dlp/plugins/bgutil` に配置する。
+- Redis（`redis-server`）/ pot-provider / API / dispatcher は systemd サービスとして登録する。pot-provider と Redis は `127.0.0.1` に限定する。worker は dispatcher の子プロセスとして起動される。
+- Node.js は apt の版（18）では足りないため、NodeSource の Node.js 24 を導入する（pot-provider は 22 以上、Redis Insight は 24 以上が必要）。
+- 任意で nginx（HTTPS）、cloudflared、Redis の Web UI、ログイン用ブラウザを導入する。`install`/`update` のたびに設定値（`WITH_*`）へ収束し、`0` にすると停止・撤去する。
+- ログイン用ブラウザ（`ytdlpserver-browser`）の Chromium は、Ubuntu の `chromium` が snap で LXC では使えないため、Playwright の Chromium を `$YTDLPSERVER_DIR/browsers` に導入し、`$YTDLPSERVER_DIR/bin/chromium` から参照する。
+  メモリ・ディスクが閾値（メモリ 2048MB / 空き 1024MB）未満なら、`WITH_BROWSER` が明示されていない限り導入しない。
 
 ### cloudflared の版数・整合性検証
 
-`WITH_CLOUDFLARED=1` を指定すると、`install/setup.sh` の `setup_cloudflared()` が**実行時**に GitHub Releases から cloudflared の最新版を取得し、GitHub API がアセットごとに返すダイジェスト（`digest: sha256:...`）と突き合わせて検証する。
-CI（`installer.yml`）側での版数・SHA256 の事前埋め込みは行わない（`install/setup.sh` は git checkout されたソースそのままで、`build-install.sh` のような CI による値の埋め込み対象にはできないため）。ダイジェストを取得できない場合は警告のうえ検証をスキップする。
+`WITH_CLOUDFLARED=1` を指定すると、`installer/app.sh` の `setup_cloudflared` が**実行時**に GitHub Releases から cloudflared の最新版を取得し、GitHub API がアセットごとに返すダイジェスト（`digest: sha256:...`）と突き合わせて検証する。ダイジェストを取得できない場合は警告のうえ検証をスキップする。
 
 ### Redis Insight のビルド
 
@@ -417,42 +417,40 @@ CI（`installer.yml`）側での版数・SHA256 の事前埋め込みは行わ�
 `sh -n` と `shellcheck -S warning` を通すこと（CI でも実施）。
 
 ```sh
-for f in install/*.sh; do sh -n "$f"; done
-shellcheck -S warning install/*.sh
+for f in installer/*.sh installer/run/*.sh; do sh -n "$f"; done
+shellcheck -S warning installer/*.sh installer/run/*.sh
 ```
 
-`install.sh` の生成（`install.sh.tmpl` への埋め込み）は手元でも試せる。
+`install.sh` の生成（ひな形への埋め込み）は手元でも試せる。
 
 ```sh
-sh install/build-install.sh <REF> <40桁のコミットハッシュ> <REPO_URL> > /tmp/install.sh
+sh installer/build-bootstrap.sh <REF> <40桁のコミットハッシュ> <REPO_URL> > /tmp/install.sh
 sh -n /tmp/install.sh
 ```
 
-### 設定スキーマ版（アップデート対応）
+実機（使い捨ての Ubuntu 24.04 LXC コンテナ）での受け入れ検証は、LXD が使えるホストで `tests/installer/e2e.sh` を実行する。結果ファイルを `INSTALLER_E2E_RESULT` に渡して `node --test tests/installer/*.test.mjs` を実行すると、受け入れ条件ごとの合否になる。
 
-`REDIS_INSIGHT_VERSION` のように「リリースに追従させたい既定値」から解決した値は、一度 `/etc/conf.d/ytdlpserver` に保存されると、以降は保存済みの値が再読込されるだけになり、新しいインストーラの既定値に切り替わらない（放っておくと、新しいインストーラを実行してもアップデートされない）。
+```sh
+LXC="sudo lxc" sh tests/installer/e2e.sh <ブランチ名がtestのgitリポジトリ> /tmp/result.txt
+INSTALLER_E2E_RESULT=/tmp/result.txt node --test tests/installer/*.test.mjs
+```
 
-これを解決するため、スクリプト先頭の `SCRIPT_SCHEMA_VERSION` を、保存済みの `_SCHEMA_VERSION`（`CONF_FILE` 内、ユーザー設定ではない内部項目）と比較し、上がっていれば「アップデート」とみなして、明示的に環境変数で指定されていない限りその追従項目（`REDIS_INSIGHT_VERSION`）を保存済みの値ごと破棄し、新しい既定値を使わせる。
+### 設定キーを増やすとき
 
-**次のいずれかを行った場合は `SCRIPT_SCHEMA_VERSION` を 1 上げること。**
-
-- 追従させたい既定値の意味を変えた（例: `REDIS_INSIGHT_VERSION` の既定値を上げた）
-- 追従対象の環境変数を増減した（上記の for ループの対象を変えた）
-- `_ENV_KEYS` から項目を削除した（削除自体は毎回の `write_conf` の書き直しで自動的に行われるが、上げておくとアップデート扱いのログが出て利用者に伝わる）
-
-`_ENV_KEYS` に無い項目が保存済みファイルに残っていた場合は、版数によらず毎回検出して警告し、次の `write_conf` で自動的に削除される。
+`installer/config.schema` に 1 行追加する。`update` で既存の環境に既定値のまま追記される。既存の値は変わらない。既定値を変えたい場合は、利用者が `--set` で上書きする。検査が必要なキーは `installer/app.sh` の `check_values` に足す。
 
 ## CI
 
-[.github/workflows/installer.yml](.github/workflows/installer.yml) が、ブランチ・タグへの push ごとに動く（`install/setup.sh` は git checkout されたソースそのままなので、REPO_REF のように特定ファイルの変更だけをトリガーにはしない）。
+[.github/workflows/release-installer.yml](.github/workflows/release-installer.yml) が、ブランチ・タグへの push と手動実行ごとに動く（ソースは git checkout されたそのままなので、特定ファイルの変更だけをトリガーにはしない）。
 
-1. `sh -n` と `shellcheck -S warning` で `install/*.sh` を構文チェックする。
-2. `install/build-install.sh` に、そのコミットの REF（ブランチ / タグ名）・COMMIT（フルSHA）・REPO_URL を渡して `install.sh` を生成する（`install.sh.tmpl` の `@@REF@@` / `@@COMMIT@@` / `@@REPO_URL@@` を置換）。
+1. `sh -n` と `shellcheck -S warning` で `installer/*.sh`・`installer/run/*.sh` を検査し、バイナリ名選択の単体テストとインストーラの静的検査を実行する。
+2. `installer/build-bootstrap.sh` に、そのコミットの REF（ブランチ / タグ名）・COMMIT（フルSHA）・REPO_URL を渡して `install.sh` を生成する。
 3. 公開する。
    - タグ（`v*`）: 通常の Release に `install.sh`・`install.sh.sha256` を添付する。
-   - ブランチ: ワークフローの artifact（`installer-<ブランチ名（/ は - に置換）>`）として保存する（Release は作らない）。
+   - ブランチ: ワークフローの artifact（`installer-<ブランチ名（/ は - に置換）>`）として保存しつつ、`<ブランチ名（/ は - に置換）>` のタグの Pre-release へ添付する（push のたびに削除して作り直す）。
+   - 手動実行（`workflow_dispatch`）: ブランチやタグを選んで再実行すると、上記と同じ処理を行う（ブランチなら Pre-release の再作成として使える）。
 
-`install.sh.tmpl` の `@@REF@@` / `@@COMMIT@@` / `@@REPO_URL@@` はひな形内では置換せず残す約束（`build-install.sh` が置換する対象のため）。この形式を変えると `build-install.sh` の置換・置換漏れ検査が壊れるため、変更時は両者を合わせて確認する。
+`bootstrap.sh.tmpl` の `@@REF@@` / `@@COMMIT@@` / `@@REPO_URL@@` はひな形内では置換せず残す約束（`build-bootstrap.sh` が置換する対象のため）。この形式を変えると置換・置換漏れ検査が壊れるため、変更時は両者を合わせて確認する。
 
 ## テスト
 

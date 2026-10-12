@@ -1,7 +1,7 @@
 """yt-dlp の新版の確認・取得・検証・原子的な切替 (dispatcher の別スレッドで実行)。
 
 設計は specs/workerServer/design.md の「yt-dlp の更新」を参照。
-GitHub Releases の musllinux バイナリを使う (PoC の比較結果、specs/design.md 参照)。
+GitHub Releases の公式バイナリ (glibc は linux、musl は musllinux) を使う (PoC の比較結果、specs/design.md 参照)。
 署名 (SHA2-256SUMS.sig) の検証は行わない (specs/workerServer/design.md の既知の制約)。
 """
 from __future__ import annotations
@@ -45,14 +45,18 @@ class UpdaterConfig:
         )
 
 
+def is_musl() -> bool:
+    return any(Path("/lib").glob("ld-musl-*"))
+
+
 def asset_name() -> str:
     machine = platform.machine().lower()
-    if machine in ("x86_64", "amd64"):
-        return "yt-dlp_musllinux"
-    if machine in ("aarch64", "arm64"):
-        return "yt-dlp_musllinux_aarch64"
-    msg = f"unsupported architecture for yt-dlp binary: {machine}"
-    raise RuntimeError(msg)
+    suffix = {"x86_64": "", "amd64": "", "aarch64": "_aarch64", "arm64": "_aarch64"}
+    if machine not in suffix:
+        msg = f"unsupported architecture for yt-dlp binary: {machine}"
+        raise RuntimeError(msg)
+    base = "yt-dlp_musllinux" if is_musl() else "yt-dlp_linux"
+    return base + suffix[machine]
 
 
 def latest_tag(repo: str) -> str:

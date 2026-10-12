@@ -29,10 +29,11 @@ class UpdaterTest(unittest.TestCase):
         sys.path.remove(SRC)
 
     def test_asset_name_by_arch(self) -> None:
-        with mock.patch("platform.machine", return_value="x86_64"):
-            self.assertEqual(self.updater.asset_name(), "yt-dlp_musllinux")
-        with mock.patch("platform.machine", return_value="aarch64"):
-            self.assertEqual(self.updater.asset_name(), "yt-dlp_musllinux_aarch64")
+        with mock.patch.object(self.updater, "is_musl", return_value=True):
+            with mock.patch("platform.machine", return_value="x86_64"):
+                self.assertEqual(self.updater.asset_name(), "yt-dlp_musllinux")
+            with mock.patch("platform.machine", return_value="aarch64"):
+                self.assertEqual(self.updater.asset_name(), "yt-dlp_musllinux_aarch64")
         with mock.patch("platform.machine", return_value="mips"), \
                 self.assertRaises(RuntimeError):
             self.updater.asset_name()

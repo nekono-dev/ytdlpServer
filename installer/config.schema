@@ -1,0 +1,32 @@
+DOWNLOAD_DIR|/mnt|optional|動画の保存先
+COOKIE_DIR|/var/lib/ytdlpserver/cookies|optional|cookie プロファイルの保存先
+WORKER_MAX|1|optional|同時に動く worker の最大数
+API_PORT|5000|optional|API の待ち受けポート
+POT_PORT|4416|optional|pot-provider の待ち受けポート（127.0.0.1 限定）
+REDIS_TTL|604800|optional|ジョブ情報の保持秒数
+RETRY_COUNT|5|optional|ダウンロードの再試行回数
+YTDLP_REPO|yt-dlp/yt-dlp|optional|yt-dlp の取得元 GitHub リポジトリ
+UPDATE_INTERVAL|21600|optional|yt-dlp の新版の確認間隔（秒）
+UPDATE_RETRY_INTERVAL|1800|optional|確認失敗後の再確認間隔（秒）
+UPDATE_COOLDOWN|1800|optional|probe 失敗による確認依頼の最短間隔（秒）
+KEEP_VERSIONS|2|optional|導入先に残す yt-dlp の版数
+DISPATCH_SCAN_INTERVAL|30|optional|dispatcher がジョブを定期確認する間隔（秒）
+LEASE_TTL|60|optional|worker のリースの有効期間（秒）
+HEARTBEAT_INTERVAL|10|optional|worker がリースを更新する間隔（秒）
+STOP_GRACE|20|optional|停止指示から強制終了までの猶予（秒）
+INPROGRESS_STALE|21600|optional|所有者不明の処理中ジョブを回収するまでの秒数
+WITH_BROWSER|1|optional|1 でログイン用ブラウザを導入する
+BROWSER_PORT|8080|optional|ログイン操作画面のポート
+BROWSER_UI_URL||optional|login_url の基準 URL（空なら外向き IP から組み立てる）
+SESSION_TIMEOUT|900|optional|ログイン操作の自動終了までの秒数
+BROWSER_LANG|ja,en-US,en|optional|ブラウザの言語
+BROWSER_TZ|Asia/Tokyo|optional|ブラウザのタイムゾーン
+WITH_NGINX|0|optional|1 で nginx（443、自己署名証明書）を導入する
+SSL_CN|localhost|optional|自己署名証明書の CN
+WITH_CLOUDFLARED|0|optional|1 で cloudflared を導入する
+CLOUDFLARE_TOKEN||optional|Cloudflare Tunnel のトークン
+WITH_REDIS_UI|1|optional|1 で Redis の Web UI を導入する
+REDIS_UI|insight|optional|insight または commander
+REDIS_INSIGHT_VERSION|3.8.0|optional|ビルドする Redis Insight のタグ
+RI_BUILD_STORAGE|auto|optional|ビルド先（tmpfs・disk・auto）
+REDIS_UI_HOST|0.0.0.0|optional|Web UI の待ち受けアドレス

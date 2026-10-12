@@ -114,7 +114,7 @@ flowchart TD
 | 項目 | 内容 |
 |---|---|
 | 取得元 | `https://github.com/yt-dlp/yt-dlp/releases/latest`（環境変数 `YTDLP_REPO` で変更できる）。API（`api.github.com`）は使わない（未認証は 60 回 / 時の制限があるため） |
-| 資産 | `uname -m` で選ぶ: `x86_64` は `yt-dlp_musllinux`、`aarch64` は `yt-dlp_musllinux_aarch64`。チェックサムは同じ版の `SHA2-256SUMS` |
+| 資産 | `uname -m` と libc で選ぶ: musl は `x86_64` が `yt-dlp_musllinux`、`aarch64` が `yt-dlp_musllinux_aarch64`、glibc は `yt-dlp_linux`、`yt-dlp_linux_aarch64`。チェックサムは同じ版の `SHA2-256SUMS` |
 | 切替 | `ln -sfn versions/<版> current.tmp` → `mv -T current.tmp current`（`rename`。原子的）。実行中のプロセスは旧版のまま完走し、新規に起動するものが新版になる（検証済み） |
 | 実行中のファイル | 旧版のファイルは、切替後も削除しない（`KEEP_VERSIONS` の範囲）。新しいファイルへの切替のみで、実行中のバイナリへは書き込まない |
 | 記録（Redis hash `ytdlp:updater`） | `checked_at`（前回の確認）、`current`（導入中の版）、`updated_at`、`last_error` |
