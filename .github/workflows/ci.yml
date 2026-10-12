@@ -55,14 +55,14 @@ jobs:
 
       - run: npm ci
 
+      - name: Playwright のブラウザを導入（受け入れ条件との対応テストが実ブラウザを使うため、npm test より前に行う）
+        run: npx playwright install --with-deps chromium
+
       - name: Python の単体テスト
         run: python3 -m unittest discover -s tests
 
       - name: 受け入れ条件との対応とインストーラの静的検査
         run: npm test
-
-      - name: Playwright のブラウザを導入
-        run: npx playwright install --with-deps chromium
 
       - name: 操作ページの E2E
         run: npm run test:e2e
