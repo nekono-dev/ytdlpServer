@@ -1,7 +1,6 @@
 """ジョブの状態遷移・取得・回収。worker (main.py) と dispatcher (dispatcher.py) が共有する。
 
-設計は specs/workerServer/design.md の「イベント駆動の worker 起動、yt-dlp の更新、
-ライフサイクル」を参照。
+仕様は specs/dispatcher/ (回収・対象数) と specs/worker-runtime/ (取得・リース) を参照。
 
 キー:
   ytdlp:queue                 list   API が RPUSH するキュー

@@ -184,6 +184,11 @@ class LaunchTest(unittest.TestCase):
         self.assertFalse([a for a in args if a.startswith("--user-agent")])
         self.assertEqual((args[0], args[-1]), ("chromium", "about:blank"))
 
+    def test_cdp_port_is_loopback_only(self) -> None:
+        args = self.b.chromium_args("/tmp/p", mobile=False)
+        self.assertIn("--remote-debugging-port=9222", args)
+        self.assertFalse([a for a in args if a.startswith("--remote-debugging-address")])
+
     def test_mobile_ua_only_when_mobile(self) -> None:
         args = self.b.chromium_args("/tmp/p", mobile=True)
         ua = [a for a in args if a.startswith("--user-agent=")]
@@ -206,6 +211,80 @@ class LaunchTest(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(out):
             self.b.warn_if_utc()
         self.assertIn("WARNING", out.getvalue(), "TZ 未設定は UTC 扱い")
+
+
+class TabsTest(unittest.IsolatedAsyncioTestCase):
+    """ChromiumBrowser のタブの追従・表示領域・フレームの応答(CDP は差し替える)。"""
+
+    async def asyncSetUp(self) -> None:
+        import shutil
+        load_service("browserServer", tempfile.mkdtemp())
+        self.b = sys.modules["browser"].ChromiumBrowser(mobile=True)
+        self.addCleanup(shutil.rmtree, self.b.profile_dir, True)
+        self.calls: list[tuple] = []
+        self.pages = [{"targetId": "t1", "type": "page"}]
+
+        async def send(method: str, params: dict | None = None, session_id: str | None = None) -> dict:
+            self.calls.append((method, params, session_id))
+            if method == "Target.attachToTarget":
+                return {"sessionId": "s-" + params["targetId"]}
+            if method == "Target.getTargets":
+                return {"targetInfos": self.pages}
+            if method == "Target.getTargetInfo":
+                return {"targetInfo": {"url": "https://x/"}}
+            return {}
+
+        self.b.send = send
+
+    def names(self) -> list[str]:
+        return [c[0] for c in self.calls]
+
+    async def test_popup_tab_is_followed(self) -> None:
+        await self.b._event({"method": "Target.targetCreated", "params": {
+            "targetInfo": {"targetId": "t2", "type": "page", "openerId": "t1"}}})
+        self.assertEqual(self.b.target_id, "t2")
+        self.assertIn("Target.activateTarget", self.names())
+        await self.b._event({"method": "Target.targetCreated", "params": {
+            "targetInfo": {"targetId": "t3", "type": "page"}}})
+        self.assertEqual(self.b.target_id, "t2", "元のタブを持たないタブには追従しない")
+
+    async def test_closed_tab_falls_back_to_remaining(self) -> None:
+        await self.b.switch("t1")
+        await self.b.switch("t2")
+        self.pages = [{"targetId": "t1", "type": "page"}]
+        await self.b._on_destroyed("t2")
+        self.assertEqual(self.b.target_id, "t1")
+
+    async def test_viewport_applies_to_all_tabs_and_is_clamped(self) -> None:
+        await self.b.switch("t1")
+        await self.b.switch("t2")
+        self.calls.clear()
+        await self.b.set_viewport(5000, 100, 9)
+        self.assertEqual(self.b.viewport, {"width": 2000, "height": 240, "dpr": 2.0})
+        metrics = [c for c in self.calls if c[0] == "Emulation.setDeviceMetricsOverride"]
+        self.assertEqual(sorted(c[2] for c in metrics), ["s-t1", "s-t2"])
+        self.assertTrue(all(c[1]["mobile"] for c in metrics))
+        cast = [c for c in self.calls if c[0] == "Page.startScreencast"]
+        self.assertEqual(cast[-1][1]["maxWidth"], 4000)
+
+    async def test_screencast_frame_is_forwarded_and_acked(self) -> None:
+        import base64
+
+        class Client:
+            def __init__(self) -> None:
+                self.sent: list[bytes] = []
+
+            async def send_bytes(self, payload: bytes) -> None:
+                self.sent.append(payload)
+
+        await self.b.switch("t1")
+        client = Client()
+        self.b.clients.add(client)
+        self.calls.clear()
+        await self.b._event({"method": "Page.screencastFrame", "sessionId": "s-t1", "params": {
+            "data": base64.b64encode(b"JPEG").decode(), "sessionId": 7}})
+        self.assertEqual(client.sent, [b"JPEG"])
+        self.assertEqual(self.calls[-1][:2], ("Page.screencastFrameAck", {"sessionId": 7}))
 
 
 class SessionTest(unittest.IsolatedAsyncioTestCase):
@@ -270,6 +349,15 @@ class SessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(oct(self.store().stat().st_mode & 0o777), "0o600")
         self.assertEqual((self.mgr.state, b.stopped, self.mgr.browser), ("idle", 1, None))
         self.assertNotIn("TOPSECRETVALUE", str(res))
+
+    async def test_no_browser_while_idle_and_all_stopped_after(self) -> None:
+        self.assertEqual(FakeBrowser.instances, [])
+        await self.mgr.start("nico", self.URL)
+        await self.mgr.commit()
+        await self.mgr.start("nico", self.URL)
+        await self.mgr.cancel()
+        self.assertEqual(self.mgr.state, "idle")
+        self.assertEqual([b.stopped for b in FakeBrowser.instances], [1, 1])
 
     async def test_only_one_session(self) -> None:
         await self.mgr.start("nico", self.URL)

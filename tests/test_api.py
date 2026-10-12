@@ -155,6 +155,14 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn(("ytdlp:events", "queued"), self.redis.published)
 
+    def test_notify_failure_does_not_fail_request(self) -> None:
+        job = {"id": "a", "url": "https://x/1", "options": []}
+        with mock.patch.object(self.m.function, "probe_and_build_jobs", return_value=[job]), \
+                mock.patch.object(self.redis, "publish", side_effect=OSError("down")):
+            r = self.post()
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.redis.lists["ytdlp:queue"][0].count("https://x/1"), 1)
+
     def test_retry_resets_failed_count_and_notifies(self) -> None:
         self.redis.hset("ytdlp:jobs:failed:a", mapping={"failed_count": "3"})
         r = self.client.post("/download/retry")

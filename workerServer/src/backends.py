@@ -4,7 +4,7 @@
 - DockerBackend: Docker Compose 向け。docker-socket-proxy 経由で、dispatcher と
   同じイメージ・マウント・ネットワークのコンテナを作成・起動する。
 
-設計は specs/workerServer/design.md の「worker の起動 (Docker Compose / Alpine)」を参照。
+仕様は specs/dispatcher/ を参照。
 """
 from __future__ import annotations
 

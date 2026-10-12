@@ -92,7 +92,7 @@ REDIS_UI_HOST|0.0.0.0|optional|Web UI の待ち受けアドレス
 | REDIS_UI                           | insight または commander                          |
 | RI_BUILD_STORAGE                   | tmpfs、disk、auto のいずれか                      |
 | REDIS_INSIGHT_VERSION              | 英数字と `.` `_` `-` のみ                         |
-| WITH_* と WITH_REDIS_UI            | 0 または 1                                        |
+| WITH\_\* と WITH_REDIS_UI          | 0 または 1                                        |
 | DOWNLOAD_DIR                       | 絶対パスで、`/var/lib/ytdlpserver` の配下ではない |
 | WITH_CLOUDFLARED が 1              | CLOUDFLARE_TOKEN が空でない                       |
 
@@ -184,7 +184,7 @@ RestartSec=3
 | release-tag    | タグ名が v で始まる | Release を作成または再利用し、頒布物を上書き添付する                         |
 | release-branch | ブランチ            | `/` を `-` に置換した名前の Pre-release を削除して作り直し、頒布物を添付する |
 
-トリガーは push（全ブランチと v* タグ）と手動実行。
+トリガーは push（全ブランチと v\* タグ）と手動実行。
 
 ### D-10: 頒布物のコミット固定 (FR-12)
 

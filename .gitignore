@@ -169,3 +169,8 @@ cython_debug/
 /ri-build*
 /ytdlp/
 /browsers/
+
+# Node.js / Playwright
+node_modules/
+test-results/
+playwright-report/

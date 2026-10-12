@@ -1,0 +1,68 @@
+# 責務: 仕様書の lint と、単体テスト・仕様との対応・E2E の実行。ブランチ・タグへの push と、プルリクエストごとに動く。
+#   - spec-lint: 仕様書の整形（Prettier）と規則（構造・体裁・表現）、およびスキル自身のテスト
+#   - test: Python の単体テスト、受け入れ条件との対応、操作ページの E2E
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  spec-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: 仕様書の lint
+        run: npm run lint:spec
+
+      - name: 仕様駆動開発スキルのテスト
+        run: npm run test:spec
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            apiServer/requirements.txt
+            workerServer/requirements.txt
+            browserServer/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: pip install -r apiServer/requirements.txt -r workerServer/requirements.txt -r browserServer/requirements.txt
+
+      - run: npm ci
+
+      - name: Python の単体テスト
+        run: python3 -m unittest discover -s tests
+
+      - name: 受け入れ条件との対応とインストーラの静的検査
+        run: npm test
+
+      - name: Playwright のブラウザを導入
+        run: npx playwright install --with-deps chromium
+
+      - name: 操作ページの E2E
+        run: npm run test:e2e

@@ -1,8 +1,8 @@
 """yt-dlp の新版の確認・取得・検証・原子的な切替 (dispatcher の別スレッドで実行)。
 
-設計は specs/workerServer/design.md の「yt-dlp の更新」を参照。
-GitHub Releases の公式バイナリ (glibc は linux、musl は musllinux) を使う (PoC の比較結果、specs/design.md 参照)。
-署名 (SHA2-256SUMS.sig) の検証は行わない (specs/workerServer/design.md の既知の制約)。
+仕様は specs/ytdlp-updater/ を参照。
+GitHub Releases の公式バイナリ (glibc は linux、musl は musllinux) を使う。
+署名 (SHA2-256SUMS.sig) の検証は行わず、SHA2-256SUMS のチェックサムだけを照合する。
 """
 from __future__ import annotations
 

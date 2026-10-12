@@ -27,7 +27,7 @@ RUN chmod +x /workspace/entrypoint.sh
 
 # yt-dlp の初回導入 (イメージ同梱のフォールバック版)。
 # 導入先 (ytdlp-bin ボリューム、既定 /opt/ytdlp) が空・壊れている場合に使われる。
-# 取得に失敗した場合はビルドを失敗させる (specs/workerServer/design.md)。
+# 取得に失敗した場合はビルドを失敗させる (specs/ytdlp-updater/)。
 ENV YTDLP_DIR=/opt/ytdlp-image
 RUN python3 /workspace/updater.py
 ENV YTDLP_DIR=/opt/ytdlp

@@ -1,7 +1,6 @@
 """dispatcher: ジョブがあるときだけ worker を起動する常駐プロセス。
 
-設計は specs/workerServer/design.md の「イベント駆動の worker 起動」
-「yt-dlp の更新」を参照。dispatcher 自身は yt-dlp・ffmpeg を使わず、
+仕様は specs/dispatcher/ を参照。dispatcher 自身は yt-dlp・ffmpeg を使わず、
 Redis からはジョブの件数と状態 (URL・オプションは読まない) だけを見る。
 """
 from __future__ import annotations

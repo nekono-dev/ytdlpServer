@@ -14,6 +14,7 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 - [実装上のポイント](#実装上のポイント)
 - [Ubuntu インストーラ](#ubuntu-インストーラ)
 - [CI](#ci)
+- [仕様駆動開発](#仕様駆動開発)
 - [テスト](#テスト)
 - [Lint](#lint)
 - [後片付け](#後片付け)
@@ -44,7 +45,7 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 | docker-socket-proxy | （Compose のみ）dispatcher が worker コンテナを作るための、権限を絞った Docker API 代理。 |
 | Redis Insight  | Redis の閲覧用 Web UI（任意）。                                                          |
 
-イベント駆動の設計は [specs/design.md](specs/design.md)・[specs/workerServer/design.md](specs/workerServer/design.md) を参照。
+イベント駆動の設計は [specs/dispatcher/](specs/dispatcher/)・[specs/worker-runtime/](specs/worker-runtime/)・[specs/ytdlp-updater/](specs/ytdlp-updater/) を参照。
 
 ## ディレクトリ構成
 
@@ -54,8 +55,10 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 | [workerServer/](workerServer/)                                             | Worker と dispatcher（同一イメージ）。`src/main.py`（worker。取得・実行・状態遷移）、`src/dispatcher.py`（起動判断）、`src/updater.py`（yt-dlp の更新）、`src/jobs.py`（状態遷移・回収の共有処理）、`src/backends.py`（worker の起動先。プロセス/Docker）、`src/function.py`（yt-dlp 実行） |
 | `*/src/cookies.py`・`*/src/presets.json`                                   | cookie プロファイルの共通処理と、プリセットの定義（API・Worker・browserServer で**同一内容**。一部だけ直さない） |
 | [browserServer/](browserServer/)                                           | ログイン用ブラウザ（Chromium、画面は CDP で配信）と cookie 回収。`src/main.py`（操作画面・制御 API・WebSocket、aiohttp）、`src/session.py`（状態管理）、`src/browser.py`（ブラウザ制御・画面配信・入力）、`src/netscape.py`（cookie の絞り込み・変換） |
-| [tests/](tests/)                                                           | 単体テスト（標準 `unittest`）                                     |
-| [specs/](specs/)                                                           | 要件・設計・タスク（仕様駆動開発）。全体用と、アプリ別（`apiServer/` `workerServer/` `browserServer/`）、`installer/`、`ytdlp-binary/` |
+| [tests/](tests/)                                                           | 単体テスト（標準 `unittest`）、仕様との対応（`spec-trace/`）、E2E（`e2e/`） |
+| [specs/](specs/)                                                           | 要件・設計・タスク（仕様駆動開発）。機能責務ごとに `api-server/` `browser-server/` `cookie-store/` `dispatcher/` `worker-runtime/` `ytdlp-updater/` `installer/` |
+| [.claude/skills/spec-driven-development/](.claude/skills/spec-driven-development/) | 仕様駆動開発のスキル（雛形と lint スクリプト）。`npm run lint:spec` が使う |
+| [package.json](package.json)                                               | `lint:spec`・`test:spec`・`test`・`test:e2e` のスクリプトと、Prettier・Playwright |
 | `*/yt-dlp.conf`                                                            | イメージ内の `/etc/yt-dlp.conf` になる yt-dlp 共通設定            |
 | [nginx/](nginx/)                                                           | HTTPS 構成用の nginx イメージ                                     |
 | [docker-compose.yml](docker-compose.yml)                                   | 基本構成（HTTP）。`.nginx.yml` / `.cloudflare.yml` は派生構成     |
@@ -266,7 +269,7 @@ curl -X POST http://localhost:5000/download/retry
 
 List。API が `RPUSH` する。要素は次の JSON。worker は `LMOVE` で 1 件を取り出す
 （`ytdlp:processing:<worker_id>` へ一時的に移してから、`ytdlp:jobs:in_progress:<id>` の記録を作る。
-[ライフサイクル](specs/workerServer/design.md) を参照）。
+[ワーカー](specs/worker-runtime/design.md) を参照）。
 
 | 項目     | 内容                                                                    |
 | -------- | ----------------------------------------------------------------------- |
@@ -351,14 +354,14 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 
 ### cookie によるログイン
 
-設計は [specs/design.md](specs/design.md)（全体）、[specs/apiServer/design.md](specs/apiServer/design.md)、[specs/workerServer/design.md](specs/workerServer/design.md) を参照する。
+設計は [specs/cookie-store/](specs/cookie-store/)・[specs/api-server/](specs/api-server/)・[specs/browser-server/](specs/browser-server/)・[specs/worker-runtime/](specs/worker-runtime/) を参照する。
 共通処理は `*/src/cookies.py`、プリセットの定義は `*/src/presets.json`（どちらも 3 アプリで同一内容。**修正するときは全て揃える**。一致はテストで確認する）。ユーザが追加したサイトは `COOKIE_DIR/profiles.json` に保存される。
 
 ### コンテナイメージ
 
 - どちらも `alpine:3.21` ベース。API のイメージには `nginx` も含まれるが、API のコードからは使っていない。
 - Worker は `ffmpeg` / `mutagen` を含む。
-- yt-dlp は pip ではなく GitHub Releases の musllinux バイナリを使う（採用理由は [specs/design.md](specs/design.md) の「yt-dlp の配布方式」）。
+- yt-dlp は pip ではなく GitHub Releases のバイナリを使う（Alpine は musllinux、Ubuntu は linux。仕様は [specs/ytdlp-updater/](specs/ytdlp-updater/)）。
   ビルド時に初期版を `/opt/ytdlp-image` へ同梱し、実行時は名前付きボリューム `ytdlp-bin`（`/opt/ytdlp`）を `PATH` の先頭で参照する
   （`/opt/ytdlp-image` はボリュームが空・壊れているときのフォールバック）。更新は dispatcher が一括で行い、
   api・worker は再起動なしに新版を使う。
@@ -452,20 +455,42 @@ INSTALLER_E2E_RESULT=/tmp/result.txt node --test tests/installer/*.test.mjs
 
 `bootstrap.sh.tmpl` の `@@REF@@` / `@@COMMIT@@` / `@@REPO_URL@@` はひな形内では置換せず残す約束（`build-bootstrap.sh` が置換する対象のため）。この形式を変えると置換・置換漏れ検査が壊れるため、変更時は両者を合わせて確認する。
 
-## テスト
+## 仕様駆動開発
 
-標準の `unittest` で、Redis やネットワークは不要（Redis は疑似実装、yt-dlp は差し替え）。依存は API・browserServer の `requirements.txt` のとおり。
+機能の追加・修正は、`specs/<コンポーネント>/` の `requirements.md`・`design.md`・`tasks.md` を整備してから行う。書式と規則は [.claude/skills/spec-driven-development/SKILL.md](.claude/skills/spec-driven-development/SKILL.md) と、その `references/rules.md` に従い、合否は lint だけで判定する。
 
 ```sh
-pip install -r apiServer/requirements.txt -r browserServer/requirements.txt
-python3 -m unittest discover -s tests -v
+npm ci
+npm run lint:spec                          # 全 spec の整形（Prettier）と規則（構造・体裁・表現）を検査する
+npm run lint:spec -- api-server            # 1つの spec だけ検査する
+npx prettier --write specs                 # 整形の指摘を直す
+npm run test:spec                          # スキル自身のテスト
+```
+
+- 1ディレクトリ = 1コンポーネント。他の spec への言及は、`requirements.md` の「3. 前提」に2件まで。
+- すべてのタスクが完了した spec は、設計書の構成表のパスと検証行のテストが実在し、すべての受け入れ条件にテスト名の `<spec名>/AC-n` が付いたテストが存在しなければならない。
+  - Python の単体テストは、`tests/spec-trace/<spec名>.test.mjs` がテスト名つきで実行する（`PYTHON` 環境変数で Python を指定できる）。
+  - 操作ページの検証は Playwright（`tests/e2e/`）で行う。
+- 要件や設計を変える変更は、同じ変更の中で spec も更新する。
+
+## テスト
+
+標準の `unittest` で、Redis やネットワークは不要（Redis は疑似実装、yt-dlp は差し替え）。
+
+```sh
+pip install -r apiServer/requirements.txt -r workerServer/requirements.txt -r browserServer/requirements.txt
+python3 -m unittest discover -s tests -v                 # 単体テスト
+npm ci && npx playwright install --with-deps chromium
+npm test                                                  # 仕様との対応（単体テストを AC のタグつきで実行）と、インストーラの静的検査
+npm run test:e2e                                          # 操作ページの E2E（偽のブラウザで制御 API を起動する）
 ```
 
 - `tests/test_cookies.py`: 共通処理（判定・禁止オプション・書き戻し・状態・プロファイルの定義と解決・履歴）。3 アプリの `cookies.py` と `presets.json` が同一であることも確認する。
 - `tests/test_api.py`: 401 応答、予約の保持、リトライ除外、ログの伏せ字、通知（`queued`/`check_update`）の発行など。
-- `tests/test_worker.py`: yt-dlp 実行（Popen）、ジョブの取得・状態遷移・回収（`jobs.py`）、`run_once` の一連の流れ（完了・失敗・中断・所有権の喪失）。
-- `tests/test_dispatcher.py`: yt-dlp の更新判定（`updater.py`）、起動先（`backends.py`）、起動数の計算・バックオフ（`dispatcher.py`）。
-- `tests/test_browser.py`: cookie の絞り込み・変換、入力の CDP への変換、セッションの状態遷移（排他・タイムアウト・失敗時の破棄）、制御 API と WebSocket。Chromium と CDP は差し替える。
+- `tests/test_worker.py`・`tests/test_worker_runtime.py`: yt-dlp 実行（Popen）、ジョブの取得・状態遷移・回収（`jobs.py`）、`run_once` の一連の流れ、停止、リースの失効、出力先。
+- `tests/test_dispatcher.py`・`tests/test_dispatch_loop.py`: 起動先（`backends.py`）、起動数の計算・バックオフ、監視ループ、通知、Docker バックエンド。
+- `tests/test_updater.py`・`tests/test_updater_asset.py`: yt-dlp の確認・取得・検証・切替・削除・バイナリ名の選択。
+- `tests/test_browser.py`: cookie の絞り込み・変換、入力の CDP への変換、タブの追従、セッションの状態遷移、制御 API と WebSocket。Chromium と CDP は差し替える。
 
 ## Lint
 
@@ -474,6 +499,8 @@ python3 -m unittest discover -s tests -v
 ```sh
 ruff check apiServer/src workerServer/src browserServer/src
 ```
+
+仕様書の lint は上記の[仕様駆動開発](#仕様駆動開発)を参照。
 
 ## 後片付け
 
