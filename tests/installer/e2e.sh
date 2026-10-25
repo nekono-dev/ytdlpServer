@@ -27,13 +27,13 @@ c 'echo "precedence ::ffff:0:0/96 100" >> /etc/gai.conf'
 
 COMMIT=$(git -C "$SRC" rev-parse HEAD)
 BUILD=$(mktemp)
-sh "$SRC/installer/build-bootstrap.sh" test "$COMMIT" file:///srv/ytdlp-src > "$BUILD"
+sh "$SRC/installer/build-bootstrap.sh" refs/heads/test "$COMMIT" file:///srv/ytdlp-src > "$BUILD"
 c 'mkdir -p /srv'
 $LXC file push -r -p "$SRC" "$CT/srv/" >/dev/null
 c "mv /srv/$(basename "$SRC") /srv/ytdlp-src; git config --global --add safe.directory '*' 2>/dev/null || true"
 $LXC file push "$BUILD" "$CT/root/install.sh" >/dev/null
 BAD=$(mktemp)
-sh "$SRC/installer/build-bootstrap.sh" test 0000000000000000000000000000000000000000 file:///srv/ytdlp-src > "$BAD"
+sh "$SRC/installer/build-bootstrap.sh" refs/heads/test 0000000000000000000000000000000000000000 file:///srv/ytdlp-src > "$BAD"
 $LXC file push "$BAD" "$CT/root/install-bad.sh" >/dev/null
 rm -f "$BUILD" "$BAD"
 c 'apt-get update -qq && apt-get install -y -qq git ca-certificates >/dev/null 2>&1'
@@ -102,7 +102,7 @@ if [ "$on" = 1 ] && ! c 'test -e /etc/nginx/conf.d/ytdlpserver.conf || ss -ltn |
 c 'ytdlpserver-ctl update --set WITH_REDIS_UI=1 --set RI_BUILD_STORAGE=tmpfs > /root/ui.log 2>&1'
 check AC-8 "commander" 'grep -q redis-commander /etc/systemd/system/ytdlpserver-redis-ui.service && sleep 3 && ss -ltn | grep -q ":5540 "'
 
-n=$(c 'ytdlpserver-ctl status' 2>/dev/null | grep -c -E '^(導入先|REF|コミット|取得元|更新日時):')
+n=$(c 'ytdlpserver-ctl status' 2>/dev/null | grep -c -E '^(導入先|参照|コミット|取得元|更新日時):')
 [ "$n" = 5 ] && pass AC-11b || fail AC-11b "項目数=$n"
 
 c 'ytdlpserver-ctl uninstall >/dev/null 2>&1'

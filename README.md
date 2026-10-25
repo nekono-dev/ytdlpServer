@@ -290,16 +290,21 @@ sudo ytdlpserver-ctl update --set WORKER_MAX=8
 sudo ytdlpserver-ctl update --set WITH_NGINX=1
 sudo ytdlpserver-ctl update --set WITH_NGINX=0
 
-## 導入時のブランチ・タグの最新へ更新する（設定・cookie・Redis のデータは維持される）
+## 導入中のブランチ・タグの最新へ更新する（設定・cookie・Redis のデータは維持される）
 sudo ytdlpserver-ctl update
 
-## 導入情報（導入先・REF・コミット・取得元・更新日時）
+## 別のブランチ・タグへ切り替える（以後は切り替え先に追従する）
+sudo ytdlpserver-ctl update --ref v1.3
+ytdlpserver-ctl refs   # 切り替えられるブランチ・タグの一覧
+
+## 導入情報（導入先・参照・コミット・取得元・更新日時）
 ytdlpserver-ctl status
 ```
 
 `/etc/ytdlpserver/ytdlpserver.env` を直接編集してから `sudo ytdlpserver-ctl update` を実行してもよい。
 
-- `ytdlpserver-ctl update` は、導入時の REF（ブランチ・タグ）の最新を取得して再適用する。`install.sh` を使った `update` は、その `install.sh` のコミットへ揃える。
+- `ytdlpserver-ctl update` は、導入中のブランチ・タグの最新を取得して再適用する。`install.sh` を使った `update` も同じ動作になる（`install.sh` のコミットへは戻さない）。
+- 開発中のブランチを試すときは、`install.sh` に `--ref <ブランチ名>` を付けて導入する（例: `curl -fsSL …/install.sh | sudo sh -s -- install --ref dev/v1.3`）。
 - `update` では、設定スキーマに新しく増えたキーが既定値で追記される。既存の値は変わらない。
 
 状態を見る・ログを見る・再起動する。

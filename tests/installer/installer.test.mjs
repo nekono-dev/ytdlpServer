@@ -41,17 +41,17 @@ test("installer/AC-15: 再実行は再ビルドせず 120 秒以内に終わる"
 test("installer/AC-16: 設定ファイル 600、cookie の保存先 700", e2e("AC-16"))
 test("installer/AC-18: 標準構成の install が 900 秒以内に終わる", e2e("AC-18"))
 
-test("installer/AC-13: 公開用ワークフローが3つのトリガーとジョブを持つ", () => {
+test("installer/AC-13: 公開用ワークフローが3つのトリガーと検査・生成・公開のジョブを持つ", () => {
   const yml = readFileSync(`${root}/.github/workflows/release-installer.yml`, "utf8")
   for (const needle of [
     "push:",
     "workflow_dispatch:",
     "tags: [\"v*\"]",
+    "  check:",
+    "./.github/workflows/installer-check.yml",
     "  build:",
     "  release-tag:",
-    "  release-branch:",
     "upload-artifact",
-    "--prerelease",
     "gh release upload",
   ]) {
     assert.ok(yml.includes(needle), `${needle} がありません`)

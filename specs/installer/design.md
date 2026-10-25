@@ -6,12 +6,12 @@
 | ----------------------------------------- | ---------------------------------------------------------------------------------- |
 | `installer/bootstrap.sh.tmpl`             | 頒布物のひな形。依存導入、コミット固定のソース取得、本体への委譲だけを行う         |
 | `installer/build-bootstrap.sh`            | ひな形へ REF・COMMIT・REPO_URL を埋め込み、頒布物を標準出力へ出す                  |
-| `installer/main.sh`                       | サブコマンド、設定の検証と反映、導入メタ情報、常設コマンドの配置を行う本体         |
+| `installer/main.sh`                       | サブコマンド、設定の検証と反映、導入メタ情報、常設コマンドの配置を行う共通の本体   |
 | `installer/config.schema`                 | 設定キーの宣言（キー名・既定値・必須か・説明）                                     |
-| `installer/app.sh`                        | main.sh の3つのフックから呼ばれるアプリ固有の導入・撤去処理                        |
+| `installer/app.sh`                        | main.sh が読み込むアプリ固有の導入・撤去処理（3つのフック）。宣言は app.conf       |
 | `installer/units/ytdlpserver-api.service` | API の systemd ユニットのひな形                                                    |
 | `installer/run/api.sh`                    | API の起動ラッパー。設定ファイルを読み、アプリ用の環境変数へ写して起動する         |
-| `.github/workflows/release-installer.yml` | 検査、頒布物の生成、アーティファクト・Pre-release・Release への公開                |
+| `.github/workflows/release-installer.yml` | 検査、頒布物の生成、アーティファクト・Release への公開                             |
 | `tests/installer/installer.test.mjs`      | 受け入れ条件に対応する検証。シェル検査と、使い捨てコンテナでの導入検証を実行する   |
 | `tests/installer/e2e.sh`                  | 使い捨ての Ubuntu 24.04 コンテナで受け入れ条件を順に実行し、結果ファイルへ出力する |
 
@@ -36,10 +36,8 @@ app.sh のフック `app_install` は次の順に関数を呼ぶ。各関数は�
 | 11  | `converge_optional` | 任意コンポーネントを設定に合わせて導入または撤去する                               |
 
 ```sh
-app_install() {
-  . "$SCRIPT_DIR/app.sh"
-  app_run_install
-}
+. "$SCRIPT_DIR/app.sh"   # main.sh が読み込む
+app_install              # 設定の反映後、導入メタ情報と常設コマンドより前に呼ばれる
 ```
 
 ### D-2: 設定ファイルと優先順位 (FR-2, FR-3)
@@ -99,15 +97,15 @@ REDIS_UI_HOST|0.0.0.0|optional|Web UI の待ち受けアドレス
 ### D-4: update (FR-5)
 
 ```text
-ytdlpserver-ctl update [--set K=V ...]
-  1. 導入メタ情報の REF と REPO_URL を読む
-  2. 取得先のソースを REF の最新へ fetch して checkout する
+ytdlpserver-ctl update [--ref 名前] [--set K=V ...]
+  1. 導入メタ情報の参照と REPO_URL を読む（--ref があればその名前をブランチ・タグへ解決する）
+  2. 取得先のソースを参照の最新へ fetch して checkout する
   3. 新しい main.sh を exec し、サブコマンド update とコミットを渡す
   4. 設定: スキーマの新キーを既定値で追記する。既存の値は --set と環境変数で指定されたものだけ上書きする
   5. app_install を実行する（D-1 と同じ。ビルド済みの成果物は再ビルドしない）
 ```
 
-頒布物の update は 1 と 2 を行わず、頒布物のコミットのソースへ揃えてから 3 以降を実行する。
+頒布物の update は導入済みの `ytdlpserver-ctl update` へ委譲し、頒布物のコミットへは戻さない。
 
 ### D-5: 任意コンポーネントの収束 (FR-6)
 
@@ -150,7 +148,8 @@ purge の Redis データ削除は redis-server を停止してから行う。CO
 ```text
 導入済み:                         未導入:
 導入先:     /opt/ytdlpserver      未導入
-REF:        dev/v1.3
+導入方式:   system
+参照:       dev/v1.3（branch）
 コミット:   <40桁>
 取得元:     https://github.com/<owner>/<repo>.git
 更新日時:   2026-10-12T01:00:00Z
@@ -178,11 +177,11 @@ RestartSec=3
 
 ### D-9: CI の公開 (FR-11, NFR-3)
 
-| ジョブ         | 条件                | 内容                                                                         |
-| -------------- | ------------------- | ---------------------------------------------------------------------------- |
-| build          | 全トリガー          | 構文検査、shellcheck、頒布物と SHA256 の生成、アーティファクト保存           |
-| release-tag    | タグ名が v で始まる | Release を作成または再利用し、頒布物を上書き添付する                         |
-| release-branch | ブランチ            | `/` を `-` に置換した名前の Pre-release を削除して作り直し、頒布物を添付する |
+| ジョブ      | 条件                | 内容                                                               |
+| ----------- | ------------------- | ------------------------------------------------------------------ |
+| check       | 全トリガー          | installer-check.yml（起動ラッパーの検査と静的検査）                |
+| build       | check の成功後      | 頒布物と SHA256 の生成、構文検査、shellcheck、アーティファクト保存 |
+| release-tag | タグ名が v で始まる | Release を作成または再利用し、頒布物を上書き添付する               |
 
 トリガーは push（全ブランチと v\* タグ）と手動実行。
 

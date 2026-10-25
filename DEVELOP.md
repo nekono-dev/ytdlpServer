@@ -372,15 +372,16 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 
 ## Ubuntu インストーラ
 
-[installer/](installer/) は、Docker を使わず Ubuntu 24.04（ベアメタル・LXC）へ全構成を導入する冪等なインストーラ一式。仕様は [specs/installer/](specs/installer/) にあり、構成と役割分担はホスト側のスキル `bootstrap-ci-builder` の方式に従う。
+[installer/](installer/) は、Docker を使わず Ubuntu 24.04（ベアメタル・LXC）へ全構成を導入する冪等なインストーラ一式。仕様は [specs/installer/](specs/installer/) にあり、構成と役割分担は `bootstrap-ci-builder` プラグイン（`nekono-dev` マーケットプレイス）の方式に従う。共通部分（`main.sh`・`bootstrap.sh.tmpl`・`build-bootstrap.sh`・`release-installer.yml`）は編集せず、更新はプラグインの `scripts/sync.sh` で上書きする。
 
 | ファイル | 役割 |
 | --- | --- |
-| `installer/bootstrap.sh.tmpl` | 頒布される `install.sh` のひな形。git・ca-certificates の導入と、埋め込まれたコミットのソース取得だけを行う薄い層。取得後、同じコミットの `installer/main.sh` へサブコマンドと引数を渡して実行する |
-| `installer/build-bootstrap.sh` | ひな形へ REF・COMMIT・REPO_URL を埋め込み、標準出力へ `install.sh` を出す生成スクリプト |
-| `installer/main.sh` | 本体。`install` / `update` / `uninstall [--purge]` / `status`、設定の検証・反映、導入メタ情報、常設コマンド `ytdlpserver-ctl` の配置を行う。プロジェクト固有の処理はフック 3 つ（`app_install`・`app_uninstall`・`app_purge`）に限り、`app.sh` を呼ぶ |
+| `installer/bootstrap.sh.tmpl` | 頒布される `install.sh` のひな形（共通部分）。git・ca-certificates の導入と、埋め込まれたコミットのソース取得だけを行う薄い層。取得後、同じコミットの `installer/main.sh` へサブコマンドと引数を渡して実行する。`update`・`uninstall` は導入済みの `ytdlpserver-ctl` へ委譲する |
+| `installer/build-bootstrap.sh` | ひな形へ REF（完全名）・COMMIT・REPO_URL と `app.conf` の値を埋め込み、標準出力へ `install.sh` を出す生成スクリプト（共通部分） |
+| `installer/main.sh` | 本体（共通部分）。`install` / `update [--ref]` / `uninstall [--purge]` / `status` / `refs`、設定の検証・反映、導入メタ情報、常設コマンド `ytdlpserver-ctl` の配置を行う。`app.sh` を読み込み、そのフック 3 つ（`app_install`・`app_uninstall`・`app_purge`）を呼ぶ |
+| `installer/app.conf` | アプリ名（`ytdlpserver`）と導入方式（`system`）の宣言 |
 | `installer/config.schema` | 設定キーの宣言（キー名・既定値・必須か・説明）。`--set`・環境変数で受け付けるのは宣言したキーだけ |
-| `installer/app.sh` | アプリ固有の導入・撤去処理 |
+| `installer/app.sh` | アプリ固有の導入・撤去処理（フック 3 つ） |
 | `installer/run/*.sh` | systemd ユニットの起動ラッパー。設定ファイルを読み、アプリ用の環境変数へ写して起動する |
 | `installer/units/*.service` | systemd ユニットのひな形（`@@DIR@@` を取得先に置換して配置する） |
 | `installer/build-redisinsight.sh` | Redis Insight のビルド手順 |
@@ -419,7 +420,7 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 
 ### 動作確認
 
-`sh -n` と `shellcheck -S warning` を通すこと（CI でも実施）。
+`sh -n` と `shellcheck -S warning` を通すこと（CI でも実施。`app.sh` で使う変数はすべて `main.sh` が定義する）。
 
 ```sh
 for f in installer/*.sh installer/run/*.sh; do sh -n "$f"; done
@@ -429,7 +430,7 @@ shellcheck -S warning installer/*.sh installer/run/*.sh
 `install.sh` の生成（ひな形への埋め込み）は手元でも試せる。
 
 ```sh
-sh installer/build-bootstrap.sh <REF> <40桁のコミットハッシュ> <REPO_URL> > /tmp/install.sh
+sh installer/build-bootstrap.sh refs/heads/<ブランチ名> <40桁のコミットハッシュ> <REPO_URL> > /tmp/install.sh
 sh -n /tmp/install.sh
 ```
 
@@ -448,14 +449,14 @@ INSTALLER_E2E_RESULT=/tmp/result.txt node --test tests/installer/*.test.mjs
 
 [.github/workflows/release-installer.yml](.github/workflows/release-installer.yml) が、ブランチ・タグへの push と手動実行ごとに動く（ソースは git checkout されたそのままなので、特定ファイルの変更だけをトリガーにはしない）。
 
-1. `sh -n` と `shellcheck -S warning` で `installer/*.sh`・`installer/run/*.sh` を検査し、バイナリ名選択の単体テストとインストーラの静的検査を実行する。
-2. `installer/build-bootstrap.sh` に、そのコミットの REF（ブランチ / タグ名）・COMMIT（フルSHA）・REPO_URL を渡して `install.sh` を生成する。
+1. [installer-check.yml](.github/workflows/installer-check.yml)（このプロジェクト固有の検査）を呼ぶ。起動ラッパー（`installer/run/*.sh`・`installer/build-redisinsight.sh`）の `sh -n` と `shellcheck -S warning`、インストーラの静的検査を実行する。
+2. `installer/build-bootstrap.sh` に、そのコミットの REF（`refs/heads/…` か `refs/tags/…` の完全名）・COMMIT（フルSHA）・REPO_URL を渡して `install.sh` を生成し、共通部分と生成物に `sh -n` と `shellcheck -S warning` をかける。
 3. 公開する。
    - タグ（`v*`）: 通常の Release に `install.sh`・`install.sh.sha256` を添付する。
-   - ブランチ: ワークフローの artifact（`installer-<ブランチ名（/ は - に置換）>`）として保存しつつ、`<ブランチ名（/ は - に置換）>` のタグの Pre-release へ添付する（push のたびに削除して作り直す）。
-   - 手動実行（`workflow_dispatch`）: ブランチやタグを選んで再実行すると、上記と同じ処理を行う（ブランチなら Pre-release の再作成として使える）。
+   - ブランチ: ワークフローの artifact（`installer-<ブランチ名（/ は - に置換）>`）として保存する。ブランチ用のタグ・Pre-release は作らない。ブランチの導入・切り替えは、Release の `install.sh` に `--ref <ブランチ名>` を付けて行う。
+   - 手動実行（`workflow_dispatch`）: ブランチやタグを選んで再実行すると、上記と同じ処理を行う。
 
-`bootstrap.sh.tmpl` の `@@REF@@` / `@@COMMIT@@` / `@@REPO_URL@@` はひな形内では置換せず残す約束（`build-bootstrap.sh` が置換する対象のため）。この形式を変えると置換・置換漏れ検査が壊れるため、変更時は両者を合わせて確認する。
+`bootstrap.sh.tmpl` の `@@…@@` はひな形内では置換せず残す約束（`build-bootstrap.sh` が置換する対象のため）。どちらも共通部分なので、このリポジトリでは変更しない。
 
 ## 仕様駆動開発
 

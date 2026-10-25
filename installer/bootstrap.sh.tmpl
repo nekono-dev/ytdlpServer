@@ -5,17 +5,20 @@ set -eu
 REF='@@REF@@'
 COMMIT='@@COMMIT@@'
 REPO_URL='@@REPO_URL@@'
-DIR=${YTDLPSERVER_DIR:-/opt/ytdlpserver}
-CTL='/usr/local/bin/ytdlpserver-ctl'
+APP_NAME='@@APP_NAME@@'
+INSTALL_MODE='@@INSTALL_MODE@@'
+CTL_NAME='@@CTL_NAME@@'
+CTL_SUBCOMMAND='@@CTL_SUBCOMMAND@@'
+DIR_ENV='@@DIR_ENV@@'
 
 log() { printf '==> %s\n' "$*"; }
 die() { printf 'エラー: %s\n' "$*" 1>&2; exit 1; }
 usage() {
   cat <<'EOF'
 使い方: install.sh <install|update|uninstall> [オプション]
-  install    [--set KEY=VALUE ...]   導入する（再実行しても同じ結果になる）
-  update     [--set KEY=VALUE ...]   導入済みの環境を、この install.sh のコミットへ揃える
-  uninstall  [--purge]               アプリ本体を削除する。--purge で設定・データ・導入メタ情報も削除する
+  install    [--ref NAME] [--set KEY=VALUE ...]   導入する（再実行しても同じ結果になる）。--ref でブランチ・タグを指定する
+  update     [--ref NAME] [--set KEY=VALUE ...]   導入済みの環境を更新する。--ref でブランチ・タグを切り替える
+  uninstall  [--purge]                            アプリ本体を削除する。--purge で設定・データ・導入メタ情報も削除する
 EOF
 }
 
@@ -33,7 +36,24 @@ for arg in "$@"; do
   case "$arg" in -h|--help) usage; exit 0 ;; esac
 done
 
-[ "$(id -u)" -eq 0 ] || die "root権限で実行してください（例: curl -fsSL <URL>/install.sh | sudo sh -s -- $SUB）"
+case "$INSTALL_MODE" in
+  system)
+    [ "$(id -u)" -eq 0 ] || die "root権限で実行してください（例: curl -fsSL <URL>/install.sh | sudo sh -s -- $SUB）"
+    DEFAULT_DIR="/opt/$APP_NAME"
+    BIN_DIR='/usr/local/bin'
+    ;;
+  user)
+    [ "$(id -u)" -ne 0 ] || die "一般ユーザーで実行してください（sudo は不要です）"
+    [ -n "${HOME:-}" ] || die "HOME が未設定です"
+    DEFAULT_DIR="$HOME/.local/share/$APP_NAME"
+    BIN_DIR="$HOME/.local/bin"
+    ;;
+  *) die "導入方式が不正です: $INSTALL_MODE" ;;
+esac
+DIR=$(eval "printf '%s' \"\${$DIR_ENV:-}\"")
+[ -n "$DIR" ] || DIR=$DEFAULT_DIR
+CTL="$BIN_DIR/$CTL_NAME"
+
 case "$DIR" in
   /*) ;;
   *) die "取得先は絶対パスで指定してください: $DIR" ;;
@@ -42,23 +62,30 @@ case "$DIR" in
   *[!A-Za-z0-9._/-]*) die "取得先に使えない文字が含まれます: $DIR" ;;
 esac
 
-if [ "$SUB" = "uninstall" ]; then
-  if [ -x "$CTL" ]; then
-    exec "$CTL" uninstall "$@"
+if [ "$SUB" = "uninstall" ] || [ "$SUB" = "update" ]; then
+  if [ -x "$CTL" ] && [ -n "$CTL_SUBCOMMAND" ]; then
+    exec "$CTL" "$CTL_SUBCOMMAND" "$SUB" "$@"
+  elif [ -x "$CTL" ]; then
+    exec "$CTL" "$SUB" "$@"
   fi
   [ -f "$DIR/installer/main.sh" ] || die "導入されていません（$CTL も $DIR/installer/main.sh も見つかりません）"
-  exec sh "$DIR/installer/main.sh" uninstall "$@"
+  exec sh "$DIR/installer/main.sh" "$SUB" "$@"
 fi
 
-if [ "$SUB" = "update" ]; then
-  [ -d "$DIR/.git" ] || die "導入されていません（$DIR がありません）。先に install を実行してください"
-fi
+WANT_REF=''
+for arg in "$@"; do
+  case "$arg" in --ref|--ref=*) WANT_REF=1 ;; esac
+done
 
 log "$SUB: $REF（$COMMIT）"
 
 if ! command -v git >/dev/null 2>&1 || [ ! -d /etc/ssl/certs ]; then
-  DEBIAN_FRONTEND=noninteractive apt-get update -qq
-  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git ca-certificates
+  if [ "$INSTALL_MODE" = "system" ] && command -v apt-get >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git ca-certificates
+  else
+    die "git と ca-certificates を導入してから再実行してください"
+  fi
 fi
 
 if [ -d "$DIR/.git" ]; then
@@ -67,7 +94,7 @@ if [ -d "$DIR/.git" ]; then
   fi
 else
   mkdir -p "$DIR"
-  [ -z "$(ls -A "$DIR")" ] || die "$DIR は空ではなく、gitリポジトリでもありません。YTDLPSERVER_DIR で別の場所を指定してください"
+  [ -z "$(ls -A "$DIR")" ] || die "$DIR は空ではなく、gitリポジトリでもありません。$DIR_ENV で別の場所を指定してください"
   git -C "$DIR" -c init.defaultBranch=main init -q
   git -C "$DIR" remote add origin "$REPO_URL"
 fi
@@ -78,4 +105,7 @@ git -C "$DIR" fetch -q --depth 1 origin "$COMMIT"
 git -C "$DIR" checkout -q --detach FETCH_HEAD
 [ "$(git -C "$DIR" rev-parse HEAD)" = "$COMMIT" ] || die "取得したソースが期待するコミットと一致しません（$COMMIT）"
 
+if [ -n "$WANT_REF" ]; then
+  exec sh "$DIR/installer/main.sh" "$SUB" --repo-url "$REPO_URL" "$@"
+fi
 exec sh "$DIR/installer/main.sh" "$SUB" --ref "$REF" --commit "$COMMIT" --repo-url "$REPO_URL" "$@"

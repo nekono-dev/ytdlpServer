@@ -5,7 +5,6 @@ NGINX_CONF=/etc/nginx/conf.d/ytdlpserver.conf
 PLUGIN_DIR=/etc/yt-dlp/plugins/bgutil
 PLAYWRIGHT_DIR="$DIR/browsers"
 
-warn() { printf '警告: %s\n' "$*" 1>&2; }
 mem_mb() { awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo; }
 free_mb() { df -Pm "$1" | awk 'NR==2 {print $4}'; }
 apt_install() { DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@"; }
@@ -297,7 +296,7 @@ load_config() {
   . "$CONF_FILE"
 }
 
-app_run_install() {
+app_install() {
   load_config
   check_env
   check_values
@@ -315,7 +314,7 @@ app_run_install() {
   log "設定: $CONF_FILE（編集後は systemctl restart ytdlpserver-api ytdlpserver-dispatcher）"
 }
 
-app_run_uninstall() {
+app_uninstall() {
   for _f in "$UNIT_DIR"/ytdlpserver-*.service; do
     [ -f "$_f" ] || continue
     remove_unit "$(basename "$_f" .service)"
@@ -325,7 +324,7 @@ app_run_uninstall() {
   rm -rf /etc/yt-dlp/plugins/bgutil
 }
 
-app_run_purge() {
+app_purge() {
   load_config
   systemctl stop redis-server >/dev/null 2>&1 || true
   rm -rf /var/lib/redis/dump.rdb /var/lib/redis/appendonly.aof /var/lib/redis/appendonlydir
