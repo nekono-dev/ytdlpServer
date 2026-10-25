@@ -1,5 +1,8 @@
-#!/bin/sh
-UNIT_DIR=/etc/systemd/system
+# shellcheck shell=sh disable=SC2154
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/host-service.sh"
+
+SVC_USER=$APP
 RI_DATA_DIR="$DATA_DIR/redisinsight"
 NGINX_CONF=/etc/nginx/conf.d/ytdlpserver.conf
 PLUGIN_DIR=/etc/yt-dlp/plugins/bgutil
@@ -7,41 +10,34 @@ PLAYWRIGHT_DIR="$DIR/browsers"
 
 mem_mb() { awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo; }
 free_mb() { df -Pm "$1" | awk 'NR==2 {print $4}'; }
-apt_install() { DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@"; }
-unit_exists() { [ -f "$UNIT_DIR/$1.service" ]; }
 
 check_env() {
-  [ "$(sed -n 's/^ID=//p' /etc/os-release | tr -d '"')" = ubuntu ] \
-    && [ "$(sed -n 's/^VERSION_ID=//p' /etc/os-release | tr -d '"')" = 24.04 ] \
-    || die "Ubuntu 24.04 専用です"
-  [ -d /run/systemd/system ] || die "systemd が動作していません"
+  hs_supported ubuntu:24.04
+  [ "$HS_INIT" = systemd ] || die "systemd が動作していません"
   case "$(uname -m)" in x86_64|aarch64) ;; *) die "未対応のアーキテクチャです: $(uname -m)" ;; esac
   [ "$(mem_mb)" -ge 1024 ] || die "メモリが不足しています（$(mem_mb)MB）。1024MB 以上を割り当ててください"
 }
 
-is_number() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; }
-
-check_values() {
-  _v=''
+app_check() {
+  check_env
   for _k in WORKER_MAX API_PORT POT_PORT REDIS_TTL RETRY_COUNT UPDATE_INTERVAL UPDATE_RETRY_INTERVAL \
     UPDATE_COOLDOWN KEEP_VERSIONS DISPATCH_SCAN_INTERVAL LEASE_TTL HEARTBEAT_INTERVAL STOP_GRACE \
     INPROGRESS_STALE BROWSER_PORT SESSION_TIMEOUT; do
-    eval "_v=\$$_k"
-    is_number "$_v" || die "$_k は数字で指定してください: $_v"
+    hs_expect_int "$_k" "$(config_value "$_k")"
   done
-  [ "$WORKER_MAX" -ge 1 ] || die "WORKER_MAX は 1 以上にしてください"
-  case "$YTDLP_REPO" in */*) ;; *) die "YTDLP_REPO は 所有者/リポジトリ の形で指定してください: $YTDLP_REPO" ;; esac
-  case "$REDIS_UI" in insight|commander) ;; *) die "REDIS_UI は insight か commander を指定してください: $REDIS_UI" ;; esac
-  case "$RI_BUILD_STORAGE" in tmpfs|disk|auto) ;; *) die "RI_BUILD_STORAGE は tmpfs・disk・auto のいずれかです: $RI_BUILD_STORAGE" ;; esac
-  case "$REDIS_INSIGHT_VERSION" in ''|*[!0-9A-Za-z._-]*) die "REDIS_INSIGHT_VERSION が不正です: $REDIS_INSIGHT_VERSION" ;; esac
+  hs_expect_int WORKER_MAX "$(config_value WORKER_MAX)" 1
+  case "$(config_value YTDLP_REPO)" in */*) ;; *) die "YTDLP_REPO は 所有者/リポジトリ の形で指定してください: $(config_value YTDLP_REPO)" ;; esac
+  hs_expect_one_of REDIS_UI "$(config_value REDIS_UI)" insight commander
+  hs_expect_one_of RI_BUILD_STORAGE "$(config_value RI_BUILD_STORAGE)" tmpfs disk auto
+  case "$(config_value REDIS_INSIGHT_VERSION)" in ''|*[!0-9A-Za-z._-]*) die "REDIS_INSIGHT_VERSION が不正です: $(config_value REDIS_INSIGHT_VERSION)" ;; esac
   for _k in WITH_BROWSER WITH_NGINX WITH_CLOUDFLARED WITH_REDIS_UI; do
-    eval "_v=\$$_k"
-    case "$_v" in 0|1) ;; *) die "$_k は 0 か 1 で指定してください: $_v" ;; esac
+    hs_expect_bool "$_k" "$(config_value "$_k")"
   done
-  case "$DOWNLOAD_DIR" in /*) ;; *) die "DOWNLOAD_DIR は絶対パスで指定してください: $DOWNLOAD_DIR" ;; esac
-  case "$COOKIE_DIR" in /*) ;; *) die "COOKIE_DIR は絶対パスで指定してください: $COOKIE_DIR" ;; esac
-  case "$DOWNLOAD_DIR/" in "$DATA_DIR"/*) die "DOWNLOAD_DIR は $DATA_DIR の配下にできません（purge で動画が消えるため）: $DOWNLOAD_DIR" ;; esac
-  if [ "$WITH_CLOUDFLARED" = 1 ] && [ -z "$CLOUDFLARE_TOKEN" ]; then
+  _dl=$(config_value DOWNLOAD_DIR)
+  hs_expect_abs_path DOWNLOAD_DIR "$_dl"
+  hs_expect_abs_path COOKIE_DIR "$(config_value COOKIE_DIR)"
+  case "$_dl/" in "$DATA_DIR"/*) die "DOWNLOAD_DIR は $DATA_DIR の配下にできません（purge で動画が消えるため）: $_dl" ;; esac
+  if [ "$(config_value WITH_CLOUDFLARED)" = 1 ] && [ -z "$(config_value CLOUDFLARE_TOKEN)" ]; then
     die "WITH_CLOUDFLARED=1 には CLOUDFLARE_TOKEN が必要です"
   fi
 }
@@ -54,13 +50,11 @@ install_nodejs() {
   curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
   printf 'deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_24.x nodistro main\n' > /etc/apt/sources.list.d/nodesource.list
   DEBIAN_FRONTEND=noninteractive apt-get update -qq
-  apt_install nodejs
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends nodejs
 }
 
 install_packages() {
-  log "パッケージを導入します"
-  DEBIAN_FRONTEND=noninteractive apt-get update -qq
-  apt_install python3 python3-venv python3-pip ffmpeg redis-server redis-tools git curl ca-certificates gnupg jq openssl iproute2 xz-utils
+  hs_pkg python3 python3-venv python3-pip ffmpeg redis-server redis-tools git curl ca-certificates gnupg jq openssl iproute2 xz-utils
   install_nodejs
 }
 
@@ -80,8 +74,9 @@ setup_python() {
 
 setup_ytdlp() {
   log "yt-dlp を導入します"
-  mkdir -p "$DIR/ytdlp"
+  hs_dir "$DIR/ytdlp" "$SVC_USER"
   YTDLP_DIR="$DIR/ytdlp" YTDLP_REPO="$YTDLP_REPO" "$DIR/venv/bin/python3" "$DIR/workerServer/src/updater.py"
+  chown -R "$SVC_USER:$SVC_USER" "$DIR/ytdlp"
 }
 
 setup_pot() {
@@ -100,8 +95,11 @@ setup_pot() {
 }
 
 setup_dirs() {
-  mkdir -p "$DATA_DIR" "$DOWNLOAD_DIR" "$COOKIE_DIR"
-  chmod 700 "$COOKIE_DIR"
+  hs_user "$SVC_USER"
+  hs_dir "$DATA_DIR" "$SVC_USER" 750
+  hs_dir "$DOWNLOAD_DIR" "$SVC_USER"
+  hs_dir "$COOKIE_DIR" "$SVC_USER" 700
+  chown -R "$SVC_USER:$SVC_USER" "$DATA_DIR" "$COOKIE_DIR"
 }
 
 setup_redis() {
@@ -115,53 +113,34 @@ setup_redis() {
   REDIS_CHANGED=1
 }
 
-render_unit() {
-  _name=$1; _exec=${2:-}
-  sed "s|@@DIR@@|$DIR|g; s|@@EXEC@@|$_exec|g" "$SCRIPT_DIR/units/$_name.service" > "$UNIT_DIR/$_name.service"
-}
-
-remove_unit() {
-  if unit_exists "$1"; then
-    systemctl disable --now "$1" >/dev/null 2>&1 || true
-    rm -f "$UNIT_DIR/$1.service"
-    systemctl daemon-reload
-  fi
-}
-
-start_units() {
-  for _u in "$@"; do
-    systemctl enable "$_u" >/dev/null 2>&1
-    systemctl reset-failed "$_u" >/dev/null 2>&1 || true
-    systemctl restart "$_u" || warn "$_u の起動に失敗しました（journalctl -u $_u を確認してください）"
-  done
-}
-
-setup_units() {
-  for _n in pot api dispatcher; do render_unit "ytdlpserver-$_n"; done
-  systemctl daemon-reload
+core_service() {
+  hs_service "ytdlpserver-$1" --description "$2" --user "$SVC_USER" \
+    --requires redis-server --after ytdlpserver-pot -- "$DIR/installer/run/$1.sh"
 }
 
 start_core() {
-  if [ "${REDIS_CHANGED:-0}" = 1 ] || ! systemctl is-active --quiet redis-server; then
-    start_units redis-server
-  else
-    systemctl enable redis-server >/dev/null 2>&1
-  fi
-  start_units ytdlpserver-pot ytdlpserver-api ytdlpserver-dispatcher
+  if [ "${REDIS_CHANGED:-0}" = 1 ]; then hs_start redis-server; else hs_ensure redis-server; fi
+  hs_service ytdlpserver-pot --description "ytdlpServer pot-provider" --user "$SVC_USER" -- "$DIR/installer/run/pot.sh"
+  core_service api "ytdlpServer API"
+  core_service dispatcher "ytdlpServer dispatcher"
+  hs_start ytdlpserver-pot ytdlpserver-api ytdlpserver-dispatcher
+}
+
+start_optional() {
+  (hs_start "$1") || warn "$1 の起動に失敗しました（$(hs_logs "$1") を確認してください）"
 }
 
 setup_browser() {
   log "ログイン用ブラウザを導入します"
-  apt_install xvfb fonts-noto-cjk tzdata
+  hs_pkg xvfb fonts-noto-cjk tzdata
   "$DIR/venv/bin/pip" install -q --no-cache-dir -r "$DIR/browserServer/requirements.txt" playwright
   PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_DIR" "$DIR/venv/bin/playwright" install --with-deps chromium
   _chrome=$(find "$PLAYWRIGHT_DIR" -type f -name chrome -path '*chromium-*' | head -n 1)
   [ -n "$_chrome" ] || die "Playwright の chromium が見つかりません"
   mkdir -p "$DIR/bin"
   ln -sf "$_chrome" "$DIR/bin/chromium"
-  render_unit ytdlpserver-browser
-  systemctl daemon-reload
-  start_units ytdlpserver-browser
+  hs_service ytdlpserver-browser --description "ytdlpServer login browser" --user "$SVC_USER" -- "$DIR/installer/run/browser.sh"
+  start_optional ytdlpserver-browser
 }
 
 browser_allowed() {
@@ -176,7 +155,7 @@ browser_allowed() {
 
 setup_nginx() {
   log "nginx を設定します"
-  apt_install nginx openssl
+  hs_pkg nginx openssl
   mkdir -p /etc/nginx/certs
   if [ ! -f /etc/nginx/certs/server.crt ]; then
     openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
@@ -187,7 +166,7 @@ setup_nginx() {
   sed "s#http://api:5000#http://127.0.0.1:$API_PORT#" "$DIR/nginx/conf.d/default.conf" > "$NGINX_CONF"
   rm -f /etc/nginx/sites-enabled/default
   nginx -t
-  start_units nginx
+  start_optional nginx
 }
 
 teardown_nginx() {
@@ -214,14 +193,9 @@ setup_cloudflared() {
   esac
   install -m 755 "$_tmp" /usr/local/bin/cloudflared
   rm -f "$_tmp"
-  render_unit ytdlpserver-cloudflared
-  systemctl daemon-reload
-  start_units ytdlpserver-cloudflared
-}
-
-teardown_cloudflared() {
-  remove_unit ytdlpserver-cloudflared
-  rm -f /usr/local/bin/cloudflared
+  hs_service ytdlpserver-cloudflared --description "ytdlpServer Cloudflare Tunnel" --user "$SVC_USER" \
+    --after ytdlpserver-api -- "$DIR/installer/run/cloudflared.sh"
+  start_optional ytdlpserver-cloudflared
 }
 
 build_redis_insight() {
@@ -257,7 +231,7 @@ build_redis_insight() {
     return 1
   fi
   log "Redis Insight $_ver をビルドします（作業領域: $_storage、数分かかります）"
-  apt_install python3-setuptools make g++ build-essential || return 1
+  (hs_pkg python3-setuptools make g++ build-essential) || return 1
   if RI_WORK="$_work" RI_VER="$_ver" RI_DEST="$_dest" sh "$SCRIPT_DIR/build-redisinsight.sh"; then _rc=0; else _rc=1; fi
   [ "$_storage" != tmpfs ] || umount "$_work"
   rm -rf "$_work"
@@ -270,7 +244,7 @@ setup_redis_ui() {
   if [ "$REDIS_UI" = insight ]; then
     if build_redis_insight; then
       _run=redis-insight
-      mkdir -p "$RI_DATA_DIR"
+      hs_dir "$RI_DATA_DIR" "$SVC_USER"
     else
       warn "Redis Insight を導入できないため redis-commander で継続します"
     fi
@@ -278,54 +252,46 @@ setup_redis_ui() {
   if [ "$_run" = redis-commander ]; then
     npm install -g --no-audit --no-fund redis-commander
   fi
-  render_unit ytdlpserver-redis-ui "$DIR/installer/run/$_run.sh"
-  systemctl daemon-reload
-  start_units ytdlpserver-redis-ui
+  hs_service ytdlpserver-redis-ui --description "ytdlpServer Redis Web UI" --user "$SVC_USER" \
+    --requires redis-server -- "$DIR/installer/run/$_run.sh"
+  start_optional ytdlpserver-redis-ui
 }
 
 converge_optional() {
-  if [ "$WITH_BROWSER" = 1 ] && browser_allowed; then setup_browser; else remove_unit ytdlpserver-browser; fi
+  if [ "$WITH_BROWSER" = 1 ] && browser_allowed; then setup_browser; fi
   if [ "$WITH_NGINX" = 1 ]; then setup_nginx; else teardown_nginx; fi
-  if [ "$WITH_CLOUDFLARED" = 1 ]; then setup_cloudflared; else teardown_cloudflared; fi
-  if [ "$WITH_REDIS_UI" = 1 ]; then setup_redis_ui; else remove_unit ytdlpserver-redis-ui; fi
-}
-
-load_config() {
-  [ -f "$CONF_FILE" ] || return 0
-  # shellcheck source=/dev/null
-  . "$CONF_FILE"
+  if [ "$WITH_CLOUDFLARED" = 1 ]; then setup_cloudflared; else rm -f /usr/local/bin/cloudflared; fi
+  if [ "$WITH_REDIS_UI" = 1 ]; then setup_redis_ui; fi
 }
 
 app_install() {
-  load_config
   check_env
-  check_values
+  # shellcheck source=/dev/null
+  . "$CONF_FILE"
   install_packages
+  setup_dirs
   setup_python
   setup_ytdlp
   setup_pot
-  setup_dirs
   setup_redis
-  setup_units
   start_core
   converge_optional
+  hs_prune
   _ip=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')
   log "API: http://${_ip:-<IPアドレス>}:$API_PORT/download"
-  log "設定: $CONF_FILE（編集後は systemctl restart ytdlpserver-api ytdlpserver-dispatcher）"
+  log "設定: $CONF_FILE（編集後は sudo ytdlpserver-ctl update で反映）"
 }
 
 app_uninstall() {
-  for _f in "$UNIT_DIR"/ytdlpserver-*.service; do
-    [ -f "$_f" ] || continue
-    remove_unit "$(basename "$_f" .service)"
-  done
+  hs_remove_all
   teardown_nginx
   rm -f /usr/local/bin/cloudflared /etc/yt-dlp.conf
   rm -rf /etc/yt-dlp/plugins/bgutil
 }
 
 app_purge() {
-  load_config
+  # shellcheck source=/dev/null
+  [ ! -f "$CONF_FILE" ] || . "$CONF_FILE"
   systemctl stop redis-server >/dev/null 2>&1 || true
   rm -rf /var/lib/redis/dump.rdb /var/lib/redis/appendonly.aof /var/lib/redis/appendonlydir
   systemctl start redis-server >/dev/null 2>&1 || true
@@ -333,4 +299,5 @@ app_purge() {
     ""|/|/usr|/etc|/var|/opt|/home|/root|/mnt) ;;
     *) rm -rf "$COOKIE_DIR" ;;
   esac
+  hs_user_remove "$SVC_USER"
 }

@@ -1,6 +1,7 @@
 #!/bin/sh
-DIR=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-. /etc/ytdlpserver/ytdlpserver.env
+DIR=$HS_DIR
+# shellcheck source=/dev/null
+. "$HS_CONF_FILE"
 REDIS_URL='redis://127.0.0.1:6379'
 PATH="$DIR/ytdlp/current:$DIR/bin:$PATH"
 if [ -z "$BROWSER_UI_URL" ]; then

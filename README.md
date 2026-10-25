@@ -174,7 +174,7 @@ lxc config device set ytdlp video shift=true
 curl -fsSL https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh | sudo sh -s -- install
 ```
 
-設定値は `--set KEY=VALUE` で指定する。指定した値は `/etc/ytdlpserver/ytdlpserver.env`（権限 600）に保存される。
+設定値は `--set KEY=VALUE` で指定する。指定した値は `/etc/ytdlpserver/ytdlpserver.env`（権限 640・グループ ytdlpserver）に保存される。各サービスは専用ユーザー `ytdlpserver` で動き、動画の保存先（`DOWNLOAD_DIR`）はそのユーザーの所有になる。
 
 ```sh
 curl -fsSL https://github.com/nekono-dev/ytdlpServer/releases/latest/download/install.sh | sudo sh -s -- install --set WORKER_MAX=4 --set DOWNLOAD_DIR=/mnt/video

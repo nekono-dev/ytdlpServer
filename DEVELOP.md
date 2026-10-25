@@ -379,22 +379,22 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 | --- | --- |
 | `installer/bootstrap.sh.tmpl` | 頒布される `install.sh` のひな形（共通部分）。git・ca-certificates の導入と、埋め込まれたコミットのソース取得だけを行う薄い層。取得後、同じコミットの `installer/main.sh` へサブコマンドと引数を渡して実行する。`update`・`uninstall` は導入済みの `ytdlpserver-ctl` へ委譲する |
 | `installer/build-bootstrap.sh` | ひな形へ REF（完全名）・COMMIT・REPO_URL と `app.conf` の値を埋め込み、標準出力へ `install.sh` を出す生成スクリプト（共通部分） |
-| `installer/main.sh` | 本体（共通部分）。`install` / `update [--ref]` / `uninstall [--purge]` / `status` / `refs`、設定の検証・反映、導入メタ情報、常設コマンド `ytdlpserver-ctl` の配置を行う。`app.sh` を読み込み、そのフック 3 つ（`app_install`・`app_uninstall`・`app_purge`）を呼ぶ |
+| `installer/main.sh` | 本体（共通部分）。`install` / `update [--ref]` / `uninstall [--purge]` / `status` / `refs`、設定の検証・反映、導入メタ情報、常設コマンド `ytdlpserver-ctl` の配置を行う。`app.sh` を読み込み、そのフック 4 つ（`app_check`・`app_install`・`app_uninstall`・`app_purge`）を呼ぶ |
 | `installer/app.conf` | アプリ名（`ytdlpserver`）と導入方式（`system`）の宣言 |
 | `installer/config.schema` | 設定キーの宣言（キー名・既定値・必須か・説明）。`--set`・環境変数で受け付けるのは宣言したキーだけ |
-| `installer/app.sh` | アプリ固有の導入・撤去処理（フック 3 つ） |
+| `installer/app.sh` | アプリ固有の検査・導入・撤去処理（フック 4 つ） |
+| `installer/host-service.sh` | OS 判定・パッケージ・専用ユーザー・systemd ユニットの生成と起動・撤去の共通処理（共通部分。[host-service-builder](https://github.com/nekono-dev/host-service-builder) の `scripts/sync.sh` で更新する） |
 | `installer/run/*.sh` | systemd ユニットの起動ラッパー。設定ファイルを読み、アプリ用の環境変数へ写して起動する |
-| `installer/units/*.service` | systemd ユニットのひな形（`@@DIR@@` を取得先に置換して配置する） |
 | `installer/build-redisinsight.sh` | Redis Insight のビルド手順 |
 
 利用者は Release から `install.sh` を取得して実行するだけでよい（[README.md](README.md) 参照）。
 
-- 設定は `/etc/ytdlpserver/ytdlpserver.env`（権限 600）に保存される。優先順位は `--set` > 環境変数 > 既存の設定ファイル > 既定値。
+- 設定は `/etc/ytdlpserver/ytdlpserver.env`（権限 640・グループ ytdlpserver）に保存される。優先順位は `--set` > 環境変数 > 既存の設定ファイル > 既定値。
 - ソースは `YTDLPSERVER_DIR`（既定 `/opt/ytdlpserver`）そのもの。`install.sh` がここへ git clone し、直下の `installer/main.sh` を実行する。
   venv・pot-provider・ytdlp・redisinsight・browsers・bin は、その兄弟ディレクトリとして展開する（いずれも `.gitignore` 済み）。`uninstall` は取得先ごと削除する。
 - cookie の保存先は `/var/lib/ytdlpserver/cookies`、導入メタ情報は `/var/lib/ytdlpserver-installer/state`。`uninstall` では残し、`--purge` で削除する。動画の保存先は `--purge` でも削除しない（そのため `DOWNLOAD_DIR` は `/var/lib/ytdlpserver` の配下にできない）。
 - yt-dlp は `$YTDLPSERVER_DIR/ytdlp` へ GitHub Releases から導入し、`current` を更新する（glibc は `yt-dlp_linux`、musl は `yt-dlp_musllinux`）。bgutil プラグインは `/etc/yt-dlp/plugins/bgutil` に配置する。
-- Redis（`redis-server`）/ pot-provider / API / dispatcher は systemd サービスとして登録する。pot-provider と Redis は `127.0.0.1` に限定する。worker は dispatcher の子プロセスとして起動される。
+- Redis（`redis-server`）/ pot-provider / API / dispatcher は systemd サービスとして登録する。ytdlpServer のサービスは専用ユーザー `ytdlpserver` で動き、動画・cookie・データの保存先と `$YTDLPSERVER_DIR/ytdlp` はそのユーザーが所有する。ユニットは `installer/host-service.sh` の `hs_service` が生成する。pot-provider と Redis は `127.0.0.1` に限定する。worker は dispatcher の子プロセスとして起動される。
 - Node.js は apt の版（18）では足りないため、NodeSource の Node.js 24 を導入する（pot-provider は 22 以上、Redis Insight は 24 以上が必要）。
 - 任意で nginx（HTTPS）、cloudflared、Redis の Web UI、ログイン用ブラウザを導入する。`install`/`update` のたびに設定値（`WITH_*`）へ収束し、`0` にすると停止・撤去する。
 - ログイン用ブラウザ（`ytdlpserver-browser`）の Chromium は、Ubuntu の `chromium` が snap で LXC では使えないため、Playwright の Chromium を `$YTDLPSERVER_DIR/browsers` に導入し、`$YTDLPSERVER_DIR/bin/chromium` から参照する。
@@ -444,7 +444,7 @@ INSTALLER_E2E_RESULT=/tmp/result.txt node --test tests/installer/*.test.mjs
 
 ### 設定キーを増やすとき
 
-`installer/config.schema` に 1 行追加する。`update` で既存の環境に既定値のまま追記される。既存の値は変わらない。既定値を変えたい場合は、利用者が `--set` で上書きする。検査が必要なキーは `installer/app.sh` の `check_values` に足す。
+`installer/config.schema` に 1 行追加する。`update` で既存の環境に既定値のまま追記される。既存の値は変わらない。既定値を変えたい場合は、利用者が `--set` で上書きする。検査が必要なキーは `installer/app.sh` の `app_check` に足す（値は `config_value` で読む。設定ファイルへ書き込む前に止まるので、不正な値は残らない）。
 
 ## CI
 

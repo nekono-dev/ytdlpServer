@@ -73,7 +73,8 @@ fi
 if [ "$elapsed" -le 900 ]; then pass AC-18; else fail AC-18 "${elapsed}秒"; fi
 
 c 'mkdir -p /var/lib/ytdlpserver/cookies /mnt && echo c > /var/lib/ytdlpserver/cookies/marker && echo v > /mnt/video.mp4 && redis-cli set k v >/dev/null && redis-cli save >/dev/null'
-check AC-16 "権限" 'test "$(stat -c %a /etc/ytdlpserver/ytdlpserver.env)" = 600 && test "$(stat -c %a /var/lib/ytdlpserver/cookies)" = 700'
+check AC-16 "権限" 'test "$(stat -c %a:%G /etc/ytdlpserver/ytdlpserver.env)" = 640:ytdlpserver && test "$(stat -c %a:%U /var/lib/ytdlpserver/cookies)" = 700:ytdlpserver'
+check AC-19 "実行ユーザー" 'for u in api dispatcher pot; do test "$(stat -c %U /proc/$(systemctl show -p MainPID --value ytdlpserver-$u))" = ytdlpserver || exit 1; done; test "$(stat -c %U /mnt)" = ytdlpserver'
 check AC-12a "待ち受け" 'for i in $(seq 1 15); do ss -ltn | grep -q "127.0.0.1:6379" && ss -ltn | grep -q "127.0.0.1:4416" && break; sleep 2; done; ss -ltn | grep -q "127.0.0.1:4416" && ! ss -ltn | grep -E ":(6379|4416) " | grep -v 127.0.0.1'
 c 'kill -9 $(systemctl show -p MainPID --value ytdlpserver-api)' >/dev/null 2>&1
 check AC-12b "再起動" 'sleep 5; systemctl is-active ytdlpserver-api'
@@ -111,6 +112,6 @@ check AC-9 "撤去と保持" '! ls /etc/systemd/system/ytdlpserver-*.service >/d
 c 'sh /root/install.sh install --set WITH_BROWSER=0 --set WITH_REDIS_UI=0 >/dev/null 2>&1'
 c 'redis-cli set k v >/dev/null; redis-cli save >/dev/null'
 c 'ytdlpserver-ctl uninstall --purge >/dev/null 2>&1'
-check AC-10 "purge" '! test -e /etc/ytdlpserver && ! test -e /var/lib/ytdlpserver && ! test -e /var/lib/redis/dump.rdb && test -f /mnt/video.mp4'
+check AC-10 "purge" '! test -e /etc/ytdlpserver && ! test -e /var/lib/ytdlpserver && ! test -e /var/lib/redis/dump.rdb && test -f /mnt/video.mp4 && ! id ytdlpserver'
 
 echo DONE >> "$OUT"
