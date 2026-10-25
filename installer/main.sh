@@ -144,6 +144,15 @@ validate_config() {
   [ -z "$_missing" ] || die "必須の設定がありません:$_missing（--set KEY=VALUE か環境変数で指定してください）"
 }
 
+config_value() {
+  _cline=$(schema_lines | grep "^$1|") || die "設定スキーマで宣言されていません: $1"
+  _ck=${_cline%%|*}; _crest=${_cline#*|}
+  _cd=${_crest%%|*}; _crest=${_crest#*|}
+  _cr=${_crest%%|*}
+  resolve_value "$_ck" "$_cd" "$_cr" || true
+  printf '%s' "$VAL"
+}
+
 write_config() {
   mkdir -p "$CONF_DIR"
   if [ ! -f "$CONF_FILE" ]; then
@@ -267,6 +276,9 @@ cmd_apply() {
   [ -n "$REF" ] && [ -n "$COMMIT" ] && [ -n "$REPO_URL" ] || die "$SUB は install.sh 経由で実行してください（--ref・--commit・--repo-url が必要です）"
   [ "$SUB" = "install" ] || [ -f "$STATE_FILE" ] || die "導入されていません。先に install.sh install を実行してください"
   validate_config
+  if command -v app_check >/dev/null 2>&1; then
+    app_check
+  fi
   write_config
   mkdir -p "$BIN_DIR"
   app_install
