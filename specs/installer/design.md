@@ -15,7 +15,46 @@
 | `tests/installer/installer.test.mjs`      | 受け入れ条件に対応する検証。シェル検査と、使い捨てコンテナでの導入検証を実行する   |
 | `tests/installer/e2e.sh`                  | 使い捨ての Ubuntu 24.04 コンテナで受け入れ条件を順に実行し、結果ファイルへ出力する |
 
-## 2. 設計項目
+## 2. 関係図・ワークフロー
+
+リリースの生成から、導入先でのサービス起動までの依存の向きを示す。
+
+```mermaid
+flowchart LR
+  release_installer["release-installer"] --> build_bootstrap["build-bootstrap"]
+  build_bootstrap --> bootstrap_sh["bootstrap.sh"]
+  bootstrap_sh --> main
+  main --> config
+  main --> app
+  app --> ytdlpserver_api["ytdlpserver-api"]
+  ytdlpserver_api --> api
+  app --> ext_systemd["systemd"]
+  installer_test["installer.test"] --> main
+  installer_test --> e2e
+  e2e --> bootstrap_sh
+```
+
+導入の開始から設定の検証、失敗時に止まる分岐までを示す。
+
+```mermaid
+sequenceDiagram
+  participant bootstrap_sh as bootstrap.sh
+  participant main
+  participant config
+  participant app
+  participant ext_systemd as systemd
+  bootstrap_sh->>main: install の委譲
+  main->>config: 設定キーの読み込み
+  alt 値が不正
+    main-->>bootstrap_sh: 終了コード 1
+  else 値が正しい
+    main->>app: app_install
+    app->>ext_systemd: ユニットの有効化
+    app-->>main: 導入の完了
+  end
+```
+
+## 3. 設計項目
 
 ### D-1: install の導入手順 (FR-1)
 
@@ -209,7 +248,7 @@ exec sh "$DIR/installer/main.sh" "$SUB" --ref "$REF" --commit "$COMMIT" --repo-u
 
 標準構成の導入時間は、apt、pip、Playwright の chromium、pot-provider のビルドで構成する。
 
-## 3. エラー処理
+## 4. エラー処理
 
 | 事象                                        | 処理                                      |
 | ------------------------------------------- | ----------------------------------------- |

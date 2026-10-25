@@ -1,5 +1,5 @@
 # 責務: 仕様書の lint と、単体テスト・仕様との対応・E2E の実行。ブランチ・タグへの push と、プルリクエストごとに動く。
-#   - spec-lint: 仕様書の整形（Prettier）と規則（構造・体裁・表現）、およびスキル自身のテスト
+#   - spec-lint: 仕様書の整形（Prettier）と規則（構造・体裁・表現・図）。検査コマンドは GitHub Packages の @nekono-dev/spec-lint
 #   - test: Python の単体テスト、受け入れ条件との対応、操作ページの E2E
 name: ci
 
@@ -22,15 +22,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-
-      - run: npm ci
+          registry-url: https://npm.pkg.github.com
+          scope: "@nekono-dev"
 
       - name: 仕様書の lint
-        run: npm run lint:spec
-
-      - name: 仕様駆動開発スキルのテスト
-        run: npm run test:spec
+        run: npx --yes @nekono-dev/spec-lint@1
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.SPEC_LINT_TOKEN }} # read:packages 権限のトークン
 
   test:
     # Playwright のブラウザ導入が対応する OS に固定する（ubuntu-latest が 26.04 になり、導入できなくなったため）

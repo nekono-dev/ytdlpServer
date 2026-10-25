@@ -12,7 +12,47 @@
 | `tests/test_worker_runtime.py`             | 停止、リースの失効、出力先の単体テスト            |
 | `tests/spec-trace/worker-runtime.test.mjs` | 受け入れ条件のタグ付きで単体テストを実行する      |
 
-## 2. 設計項目
+## 2. 関係図・ワークフロー
+
+ワーカーがジョブ操作と yt-dlp の実行を呼ぶ依存を示す。
+
+```mermaid
+flowchart LR
+  main --> jobs
+  main --> function
+  jobs --> ext_redis["Redis"]
+  function --> yt_dlp_conf["yt-dlp"]
+  function --> ext_ytdlp["yt-dlp 本体"]
+  test_worker --> jobs
+  test_worker_runtime --> main
+  test_worker_runtime --> function
+  worker_runtime_test["worker-runtime.test"] --> test_worker
+  worker_runtime_test --> test_worker_runtime
+```
+
+ジョブの取得から実行、成功と失敗の記録までを示す。
+
+```mermaid
+sequenceDiagram
+  participant main
+  participant jobs
+  participant function
+  participant ext_ytdlp as yt-dlp 本体
+  main->>jobs: ジョブの取得
+  alt ジョブが無い
+    jobs-->>main: 空
+  else ジョブがある
+    main->>function: 実行の依頼
+    function->>ext_ytdlp: ダウンロード
+    alt 成功
+      main->>jobs: 完了の記録
+    else 失敗
+      main->>jobs: 失敗の記録
+    end
+  end
+```
+
+## 3. 設計項目
 
 ### D-1: 取得 (FR-1, FR-2, FR-3)
 
@@ -137,7 +177,7 @@ def record_failure(key, auth_profile, output, url):
 | `login_url`      | 操作 URL の設定があるときの再ログイン先。無ければ空             |
 | `worker_id`      | 実行中のワーカー                                                |
 
-## 3. エラー処理
+## 4. エラー処理
 
 | 事象                           | 処理                                           |
 | ------------------------------ | ---------------------------------------------- |

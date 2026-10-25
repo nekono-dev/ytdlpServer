@@ -11,7 +11,36 @@
 | `tests/test_cookies.py`                  | cookie 処理の単体テスト                           |
 | `tests/spec-trace/cookie-store.test.mjs` | 受け入れ条件のタグ付きで単体テストを実行する      |
 
-## 2. 設計項目
+## 2. 関係図・ワークフロー
+
+各複製が共通の定義を読み、単体テストが検証する依存を示す。
+
+```mermaid
+flowchart LR
+  cookies["src/cookies"] --> presets
+  cookies --> ext_dir["COOKIE_DIR"]
+  cookies --> ext_redis["Redis"]
+  test_cookies --> cookies
+  cookie_store_test["cookie-store.test"] --> test_cookies
+```
+
+プロファイルの状態を判定し、失効しているときの分岐を示す。
+
+```mermaid
+sequenceDiagram
+  participant cookies as src/cookies
+  participant ext_dir as COOKIE_DIR
+  participant ext_redis as Redis
+  cookies->>ext_dir: ファイルの更新時刻の取得
+  alt ファイルが無い
+    ext_dir-->>cookies: 未保存
+  else ファイルがある
+    cookies->>ext_redis: 失効の記録の取得
+    ext_redis-->>cookies: 記録
+  end
+```
+
+## 3. 設計項目
 
 ### D-1: ファイルの形式と更新 (FR-1, FR-2)
 
@@ -158,7 +187,7 @@ def login_url(profile: str | None, url: str | None = None) -> str | None:
 | 検査     | 単体テストが、複製どうしのバイト列の一致を比べる             |
 | 変更手順 | 1つを編集したら、他の2つへコピーする                         |
 
-## 3. エラー処理
+## 4. エラー処理
 
 | 事象                           | 処理                               |
 | ------------------------------ | ---------------------------------- |

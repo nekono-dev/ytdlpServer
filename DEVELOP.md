@@ -57,8 +57,9 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 | [browserServer/](browserServer/)                                           | ログイン用ブラウザ（Chromium、画面は CDP で配信）と cookie 回収。`src/main.py`（操作画面・制御 API・WebSocket、aiohttp）、`src/session.py`（状態管理）、`src/browser.py`（ブラウザ制御・画面配信・入力）、`src/netscape.py`（cookie の絞り込み・変換） |
 | [tests/](tests/)                                                           | 単体テスト（標準 `unittest`）、仕様との対応（`spec-trace/`）、E2E（`e2e/`） |
 | [specs/](specs/)                                                           | 要件・設計・タスク（仕様駆動開発）。機能責務ごとに `api-server/` `browser-server/` `cookie-store/` `dispatcher/` `worker-runtime/` `ytdlp-updater/` `installer/` |
-| [.claude/skills/spec-driven-development/](.claude/skills/spec-driven-development/) | 仕様駆動開発のスキル（雛形と lint スクリプト）。`npm run lint:spec` が使う |
-| [package.json](package.json)                                               | `lint:spec`・`test:spec`・`test`・`test:e2e` のスクリプトと、Prettier・Playwright |
+| [docs/architecture.md](docs/architecture.md) | 全体のアーキテクチャ設計書（設計済みの spec が3件以上のとき必須。`spec-lint` が検査する） |
+| [.claude/settings.json](.claude/settings.json) | 仕様駆動開発のスキル（プラグイン `spec-driven-development@nekono-dev`）を有効にする設定 |
+| [package.json](package.json)                                               | `lint:spec`（`spec-lint`）・`test`・`test:e2e` のスクリプトと、Prettier・Playwright |
 | `*/yt-dlp.conf`                                                            | イメージ内の `/etc/yt-dlp.conf` になる yt-dlp 共通設定            |
 | [nginx/](nginx/)                                                           | HTTPS 構成用の nginx イメージ                                     |
 | [docker-compose.yml](docker-compose.yml)                                   | 基本構成（HTTP）。`.nginx.yml` / `.cloudflare.yml` は派生構成     |
@@ -460,15 +461,18 @@ INSTALLER_E2E_RESULT=/tmp/result.txt node --test tests/installer/*.test.mjs
 
 ## 仕様駆動開発
 
-機能の追加・修正は、`specs/<コンポーネント>/` の `requirements.md`・`design.md`・`tasks.md` を整備してから行う。書式と規則は [.claude/skills/spec-driven-development/SKILL.md](.claude/skills/spec-driven-development/SKILL.md) と、その `references/rules.md` に従い、合否は lint だけで判定する。
+機能の追加・修正は、`specs/<コンポーネント>/` の `requirements.md`・`design.md`・`tasks.md` を整備してから行う。進め方と規則はスキル `spec-driven-development`（プラグイン。[.claude/settings.json](.claude/settings.json) で有効になる）に従い、合否は検査コマンド `spec-lint`（`@nekono-dev/spec-lint`）だけで判定する。配布元は <https://github.com/nekono-dev/spec-driven-development> である。
 
 ```sh
-npm ci
-npm run lint:spec                          # 全 spec の整形（Prettier）と規則（構造・体裁・表現）を検査する
-npm run lint:spec -- api-server            # 1つの spec だけ検査する
-npx prettier --write specs                 # 整形の指摘を直す
-npm run test:spec                          # スキル自身のテスト
+# 初回のみ。GitHub Packages の認証（read:packages 権限のトークン）を ~/.npmrc に書いてから入れる
+npm install -g @nekono-dev/spec-lint       # 同じコマンドで最新へ更新する
+spec-lint                                  # 全 spec と docs/architecture.md を検査する（整形の Prettier を含む）
+spec-lint specs/api-server                 # 1つだけ検査する
+spec-lint --format                         # 整形の指摘を直す
+claude plugin update spec-driven-development@nekono-dev   # スキルの更新（反映は再起動後）
 ```
+
+CI は `secrets.SPEC_LINT_TOKEN`（`read:packages` 権限のトークン）で `@nekono-dev/spec-lint@1` を実行する。
 
 - 1ディレクトリ = 1コンポーネント。他の spec への言及は、`requirements.md` の「3. 前提」に2件まで。
 - すべてのタスクが完了した spec は、設計書の構成表のパスと検証行のテストが実在し、すべての受け入れ条件にテスト名の `<spec名>/AC-n` が付いたテストが存在しなければならない。

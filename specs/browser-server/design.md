@@ -15,7 +15,53 @@
 | `tests/e2e/fake_server.py`                 | 実ブラウザの代わりに偽のブラウザで制御 API を起動する             |
 | `tests/spec-trace/browser-server.test.mjs` | 受け入れ条件のタグ付きで単体テストと E2E を実行する               |
 
-## 2. 設計項目
+## 2. 関係図・ワークフロー
+
+操作ページから cookie の保存までの依存の向きを示す。
+
+```mermaid
+flowchart LR
+  Dockerfile --> main
+  main --> session
+  main --> browser
+  main --> index
+  session --> browser
+  session --> netscape
+  session --> ext_store["cookie ストア"]
+  browser --> ext_chromium["Chromium"]
+  test_browser --> session
+  test_browser --> browser
+  test_browser --> netscape
+  fake_server --> main
+  browser_server_spec["browser-server.spec"] --> fake_server
+  browser_server_spec --> index
+  browser_server_test["browser-server.test"] --> test_browser
+  browser_server_test --> browser_server_spec
+```
+
+ログインの開始から cookie の保存までと、時間切れの分岐を示す。
+
+```mermaid
+sequenceDiagram
+  participant main
+  participant session
+  participant browser
+  participant netscape
+  participant ext_chromium as Chromium
+  main->>session: ログインの開始
+  session->>browser: ブラウザの起動
+  browser->>ext_chromium: 起動と接続
+  main->>session: 保存の依頼
+  alt 時間切れ
+    session->>browser: 終了
+  else 保存の依頼を受理
+    session->>browser: cookie の取得
+    session->>netscape: 絞り込みと変換
+    session-->>main: 保存の完了
+  end
+```
+
+## 3. 設計項目
 
 ### D-1: プロセス構成とポート (FR-1, FR-9)
 
@@ -148,7 +194,7 @@ cookie の値をログに出さない。ブラウザは Redis に接続しない
 | クエリ `start_url` だけ       | 「新しいサイトを追加」を選び、開始 URL の入力欄に値を入れる |
 | プロファイル一覧              | 各行に未保存、または保存日時を表示する                      |
 
-## 3. エラー処理
+## 4. エラー処理
 
 | 事象                         | 処理                                           |
 | ---------------------------- | ---------------------------------------------- |

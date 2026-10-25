@@ -12,7 +12,46 @@
 | `tests/test_dispatcher.py`                | 確認の間隔と最短間隔の単体テスト                                              |
 | `tests/spec-trace/ytdlp-updater.test.mjs` | 受け入れ条件のタグ付きで単体テストを実行する                                  |
 
-## 2. 設計項目
+## 2. 関係図・ワークフロー
+
+各イメージのビルドが updater を呼び、単体テストが検証する依存を示す。
+
+```mermaid
+flowchart LR
+  worker_Dockerfile["workerServer/Dockerfile"] --> updater
+  api_Dockerfile["apiServer/Dockerfile"] --> updater
+  updater --> ext_github["GitHub"]
+  updater --> ext_redis["Redis"]
+  test_updater --> updater
+  test_updater_asset --> updater
+  test_dispatcher --> updater
+  ytdlp_updater_test["ytdlp-updater.test"] --> test_updater
+  ytdlp_updater_test --> test_updater_asset
+  ytdlp_updater_test --> test_dispatcher
+```
+
+新版の確認から検証、切り替えまでと、失敗時に導入済みの版を保つ分岐を示す。
+
+```mermaid
+sequenceDiagram
+  participant updater
+  participant ext_github as GitHub
+  participant ext_redis as Redis
+  updater->>ext_redis: 前回の確認の取得
+  updater->>ext_github: 最新の版の確認
+  alt 版が同じ
+    updater->>ext_redis: 確認時刻の記録
+  else 新版がある
+    updater->>ext_github: バイナリの取得
+    alt 検証に成功
+      updater->>ext_redis: 切り替えの記録
+    else 検証に失敗
+      updater->>ext_redis: 失敗の記録
+    end
+  end
+```
+
+## 3. 設計項目
 
 ### D-1: 確認と取得の流れ (FR-1, FR-4, FR-5, NFR-1, NFR-2)
 
@@ -117,7 +156,7 @@ Redis の hash `ytdlp:updater` の項目は次のとおり。
 | `UPDATE_COOLDOWN`       | `1800`          | 依頼による確認の最短間隔（秒） |
 | `KEEP_VERSIONS`         | `2`             | 残す版の数                     |
 
-## 3. エラー処理
+## 4. エラー処理
 
 | 事象                     | 処理                                                           |
 | ------------------------ | -------------------------------------------------------------- |

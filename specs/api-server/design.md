@@ -11,7 +11,43 @@
 | `tests/test_api.py`                    | API の単体テスト                                            |
 | `tests/spec-trace/api-server.test.mjs` | 受け入れ条件のタグ付きで単体テストを実行する                |
 
-## 2. 設計項目
+## 2. 関係図・ワークフロー
+
+依存の向きを示す。
+
+```mermaid
+flowchart LR
+  Dockerfile --> entrypoint
+  entrypoint --> main
+  main --> function
+  main --> ext_redis["Redis"]
+  function --> ext_ytdlp["yt-dlp"]
+  test_api --> main
+  test_api --> function
+  api_server_test["api-server.test"] --> test_api
+```
+
+ダウンロード要求を検証し、ログイン要求のときは 401 で返す流れを示す。
+
+```mermaid
+sequenceDiagram
+  participant main
+  participant function
+  participant ext_ytdlp as yt-dlp
+  participant ext_redis as Redis
+  main->>main: 要求の検証
+  main->>function: 解析の依頼
+  function->>ext_ytdlp: 解析の実行
+  alt ログイン要求
+    function-->>main: 解析の失敗
+    main-->>main: 401 の応答
+  else 解析に成功
+    function-->>main: ジョブの一覧
+    main->>ext_redis: ジョブの積み込み
+  end
+```
+
+## 3. 設計項目
 
 ### D-1: エンドポイントとジョブの積み込み (FR-1, FR-2, FR-3)
 
@@ -142,7 +178,7 @@ if reset_count:
 ]
 ```
 
-## 3. エラー処理
+## 4. エラー処理
 
 | 事象                 | 処理                                |
 | -------------------- | ----------------------------------- |

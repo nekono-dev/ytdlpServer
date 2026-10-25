@@ -1,0 +1,6 @@
+{
+  "extraKnownMarketplaces": {
+    "nekono-dev": { "source": { "source": "github", "repo": "nekono-dev/claude-plugins" } }
+  },
+  "enabledPlugins": { "spec-driven-development@nekono-dev": true }
+}

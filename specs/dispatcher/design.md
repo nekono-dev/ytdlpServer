@@ -15,7 +15,52 @@
 | `tests/test_worker.py`                 | 回収と対象数の単体テスト                                         |
 | `tests/spec-trace/dispatcher.test.mjs` | 受け入れ条件のタグ付きで単体テストを実行する                     |
 
-## 2. 設計項目
+## 2. 関係図・ワークフロー
+
+起動役が監視ループからバックエンドとジョブ操作を呼ぶ依存を示す。
+
+```mermaid
+flowchart LR
+  docker_compose["docker-compose"] --> Dockerfile
+  Dockerfile --> entrypoint
+  entrypoint --> dispatcher
+  dispatcher --> backends
+  dispatcher --> jobs
+  dispatcher --> ext_redis["Redis"]
+  backends --> ext_worker["ワーカー"]
+  jobs --> ext_redis
+  test_dispatcher --> dispatcher
+  test_dispatch_loop --> dispatcher
+  test_dispatch_loop --> backends
+  test_worker --> jobs
+  dispatcher_test["dispatcher.test"] --> test_dispatcher
+  dispatcher_test --> test_dispatch_loop
+  dispatcher_test --> test_worker
+```
+
+監視ループが回収と起動を行い、起動に失敗したときに待つ分岐を示す。
+
+```mermaid
+sequenceDiagram
+  participant dispatcher
+  participant jobs
+  participant backends
+  participant ext_redis as Redis
+  dispatcher->>jobs: 回収
+  jobs->>ext_redis: 失効の確認
+  dispatcher->>backends: 実行中の数の取得
+  alt 空きがあり対象がある
+    dispatcher->>backends: ワーカーの起動
+    backends-->>dispatcher: 終了コード
+    opt 終了コードが 0 以外
+      dispatcher->>dispatcher: バックオフの待機
+    end
+  else 空きが無い
+    dispatcher->>dispatcher: 次の起床を待つ
+  end
+```
+
+## 3. 設計項目
 
 ### D-1: 監視ループと起動数 (FR-1, FR-2, FR-3, FR-4)
 
@@ -161,7 +206,7 @@ SIGTERM と SIGINT で停止のフラグを立てて起床させる。
 | docker-socket-proxy | ワーカーのコンテナの作成・起動・停止・一覧・イベント                                                  |
 | GitHub              | 新版の確認（updater が行う）                                                                          |
 
-## 3. エラー処理
+## 4. エラー処理
 
 | 事象                            | 処理                                       |
 | ------------------------------- | ------------------------------------------ |
