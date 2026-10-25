@@ -33,7 +33,8 @@ jobs:
         run: npm run test:spec
 
   test:
-    runs-on: ubuntu-latest
+    # Playwright のブラウザ導入が対応する OS に固定する（ubuntu-latest が 26.04 になり、導入できなくなったため）
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
