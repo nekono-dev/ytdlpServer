@@ -7,15 +7,25 @@ RI_DATA_DIR="$DATA_DIR/redisinsight"
 NGINX_CONF=/etc/nginx/conf.d/ytdlpserver.conf
 PLUGIN_DIR=/etc/yt-dlp/plugins/bgutil
 PLAYWRIGHT_DIR="$DIR/browsers"
+# Redis Insight のビルド先の判定値（単位は MB）
+# tmpfs は RAM 16GB 相当（15000MB 以上）のときだけ使う。12GB では tmpfs 11GB に対して余裕がなく、
+# ビルド中にページ回収が続いて停止することを確認したため（README・DEVELOP.md の「ビルド先」を参照）
+RI_TMPFS_MIN_MB=15000
+RI_TMPFS_SIZE=11000m
+RI_DISK_MIN_MB=10000
 
 mem_mb() { awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo; }
 free_mb() { df -Pm "$1" | awk 'NR==2 {print $4}'; }
+# ルートのファイルシステムの総容量（バイト）。5GB は 10^9 バイト換算で判定する
+disk_total_bytes() { df -P -B1 "$1" | awk 'NR==2 {print $2}'; }
+MIN_DISK_BYTES=5000000000
 
 check_env() {
   hs_supported ubuntu:24.04
   [ "$HS_INIT" = systemd ] || die "systemd が動作していません"
   case "$(uname -m)" in x86_64|aarch64) ;; *) die "未対応のアーキテクチャです: $(uname -m)" ;; esac
   [ "$(mem_mb)" -ge 1024 ] || die "メモリが不足しています（$(mem_mb)MB）。1024MB 以上を割り当ててください"
+  [ "$(disk_total_bytes /)" -ge "$MIN_DISK_BYTES" ] || die "ルートのディスク容量が不足しています（$(disk_total_bytes /) バイト）。5GB 以上を割り当ててください"
 }
 
 app_check() {
@@ -213,20 +223,22 @@ build_redis_insight() {
   mkdir -p "$_work"
   _storage=$RI_BUILD_STORAGE
   if [ "$_storage" != disk ]; then
-    if [ "$_mem" -lt 12000 ]; then
-      [ "$_storage" != tmpfs ] || { warn "tmpfs でのビルドにはメモリ 12000MB 程度が必要です（${_mem}MB）"; return 1; }
-      _storage=disk
-    elif mount -t tmpfs -o size=11000m tmpfs "$_work" 2>/dev/null; then
+    if [ "$_mem" -ge "$RI_TMPFS_MIN_MB" ] && mount -t tmpfs -o "size=$RI_TMPFS_SIZE" tmpfs "$_work" 2>/dev/null; then
       _storage=tmpfs
     elif [ "$_storage" = tmpfs ]; then
-      warn "tmpfs をマウントできません"
+      if [ "$_mem" -lt "$RI_TMPFS_MIN_MB" ]; then
+        warn "tmpfs でのビルドには RAM ${RI_TMPFS_MIN_MB}MB 以上が必要です（${_mem}MB）。RI_BUILD_STORAGE=disk を使うか、RAM を増やしてください"
+      else
+        warn "tmpfs をマウントできません"
+      fi
+      rm -rf "$_work"
       return 1
     else
       _storage=disk
     fi
   fi
-  if [ "$_storage" = disk ] && [ "$(free_mb "$_work")" -lt 10000 ]; then
-    warn "ビルドにはディスクの空き 10000MB 程度が必要です（$(free_mb "$_work")MB）"
+  if [ "$_storage" = disk ] && [ "$(free_mb "$_work")" -lt "$RI_DISK_MIN_MB" ]; then
+    warn "ビルドにはディスクの空き ${RI_DISK_MIN_MB}MB 程度が必要です（$(free_mb "$_work")MB）。RAM ${RI_TMPFS_MIN_MB}MB 以上で tmpfs を使うか、ディスクを拡張してください"
     rm -rf "$_work"
     return 1
   fi

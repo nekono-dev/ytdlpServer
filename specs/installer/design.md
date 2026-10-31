@@ -66,7 +66,7 @@ main.sh は設定ファイルへ書き込む前に `app_check` を呼び、書�
 
 | 順  | 関数                | 処理                                                                                |
 | --- | ------------------- | ----------------------------------------------------------------------------------- |
-| 1   | `check_env`         | Ubuntu 24.04 であること、systemd で動いていること、メモリが 1024MB 以上かを確認する |
+| 1   | `check_env`         | Ubuntu 24.04 であること、systemd で動いていること、メモリが 1024MB 以上、ルートの総容量が 5GB（10^9 バイト換算）以上かを確認する |
 | 2   | `install_packages`  | apt で依存（未導入のものだけ）と NodeSource の Node.js 24 を導入する                |
 | 3   | `setup_dirs`        | 専用ユーザーを作り、データ・動画・cookie の保存先をそのユーザーの所有にする         |
 | 4   | `setup_python`      | `$DIR/venv` を作り、各サーバの requirements を導入する                              |
@@ -164,8 +164,13 @@ WITH_BROWSER=1 でメモリ 2048MB 未満またはルート空き 1024MB 未満:
     引数指定・環境変数で WITH_BROWSER が明示されているなら警告して続行する
     明示されていないなら警告して無効にする（設定ファイルの値は変えない）
 REDIS_UI=insight:
-    Node.js 24 以上、メモリ 1800MB 以上、作業領域の条件を満たしビルドが成功すれば Redis Insight を使う
-    満たさない、または失敗したら警告して redis-commander で継続する
+    Node.js 24 以上、メモリ 1800MB 以上を満たさない場合は警告して redis-commander で継続する
+    作業領域（RI_BUILD_STORAGE）:
+        tmpfs: メモリ RI_TMPFS_MIN_MB（15000MB）以上で、サイズ RI_TMPFS_SIZE（11000m）の tmpfs をマウントできれば使う
+        disk:  ルートの空きが RI_DISK_MIN_MB（10000MB）以上あれば使う
+        auto:  tmpfs の条件を満たせば tmpfs、満たさなければ disk
+        tmpfs 指定でメモリ不足、または disk 指定で空き不足なら警告して redis-commander で継続する
+    ビルドが成功すれば Redis Insight を使い、失敗したら警告して redis-commander で継続する
 ```
 
 ### D-6: uninstall と purge (FR-7, FR-8)

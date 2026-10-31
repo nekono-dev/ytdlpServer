@@ -2,6 +2,8 @@
 set -eu
 cd "$RI_WORK"
 export XDG_CACHE_HOME="$RI_WORK/.cache" YARN_CACHE_FOLDER="$RI_WORK/.cache/yarn" npm_config_cache="$RI_WORK/.cache/npm"
+# Electron のバイナリ（デスクトップ版用）は API・UI のビルドに使わないため取得しない（大きく、取得が ENOSPC の原因になりうる）
+export ELECTRON_SKIP_BINARY_DOWNLOAD=1
 curl -fsSL "https://github.com/RedisInsight/RedisInsight/archive/refs/tags/$RI_VER.tar.gz" | tar xz --strip-components=1
 if [ -f yarn.lock ]; then
   command -v yarn >/dev/null || npm install -g --no-audit --no-fund yarn

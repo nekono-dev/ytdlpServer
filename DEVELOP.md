@@ -395,6 +395,7 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 - cookie の保存先は `/var/lib/ytdlpserver/cookies`、導入メタ情報は `/var/lib/ytdlpserver-installer/state`。`uninstall` では残し、`--purge` で削除する。動画の保存先は `--purge` でも削除しない（そのため `DOWNLOAD_DIR` は `/var/lib/ytdlpserver` の配下にできない）。
 - yt-dlp は `$YTDLPSERVER_DIR/ytdlp` へ GitHub Releases から導入し、`current` を更新する（glibc は `yt-dlp_linux`、musl は `yt-dlp_musllinux`）。bgutil プラグインは `/etc/yt-dlp/plugins/bgutil` に配置する。
 - Redis（`redis-server`）/ pot-provider / API / dispatcher は systemd サービスとして登録する。ytdlpServer のサービスは専用ユーザー `ytdlpserver` で動き、動画・cookie・データの保存先と `$YTDLPSERVER_DIR/ytdlp` はそのユーザーが所有する。ユニットは `installer/host-service.sh` の `hs_service` が生成する。pot-provider と Redis は `127.0.0.1` に限定する。worker は dispatcher の子プロセスとして起動される。
+- 最小要件は、メモリ 1024MB 以上とルートのファイルシステムの総容量 5GB 以上（`check_env` が導入前に検査する）。
 - Node.js は apt の版（18）では足りないため、NodeSource の Node.js 24 を導入する（pot-provider は 22 以上、Redis Insight は 24 以上が必要）。
 - 任意で nginx（HTTPS）、cloudflared、Redis の Web UI、ログイン用ブラウザを導入する。`install`/`update` のたびに設定値（`WITH_*`）へ収束し、`0` にすると停止・撤去する。
 - ログイン用ブラウザ（`ytdlpserver-browser`）の Chromium は、Ubuntu の `chromium` が snap で LXC では使えないため、Playwright の Chromium を `$YTDLPSERVER_DIR/browsers` に導入し、`$YTDLPSERVER_DIR/bin/chromium` から参照する。
@@ -407,17 +408,20 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
 ### Redis Insight のビルド
 
 - `REDIS_UI=insight`（既定）は、`REDIS_INSIGHT_VERSION`（既定 3.8.0）のタグをインストール先でビルドする。
-- Node.js 24 以上とメモリ 2GB 程度が必要。条件を満たさない・ビルドに失敗した場合は `redis-commander` にフォールバックする。
-- `RI_BUILD_STORAGE` でビルド先を選ぶ。
+- Node.js 24 以上とメモリ 1800MB 以上が必要。条件を満たさない・ビルドに失敗した場合は `redis-commander` にフォールバックする。
+- `RI_BUILD_STORAGE` でビルド先を選ぶ。判定値は `installer/app.sh` の `RI_TMPFS_MIN_MB`（15000）・`RI_TMPFS_SIZE`（11000m）・`RI_DISK_MIN_MB`（10000）で定める。
 
-| 値     | 内容                                                                                   |
-| ------ | -------------------------------------------------------------------------------------- |
-| tmpfs  | 作業領域をメモリ上に置く。メモリ 12GB 程度が必要（ピーク約 9.5GB）。終了後に解放される |
-| disk   | ディスクを使う。空き 10GB 程度が必要。ビルド後に削除される                             |
-| auto   | メモリが足りれば tmpfs、足りない・マウントできなければ disk                            |
+| 値     | 内容                                                                                                   |
+| ------ | ------------------------------------------------------------------------------------------------------ |
+| tmpfs  | 作業領域をメモリ上に置く（上限 11GB）。RAM 15000MB 以上が必要。終了後に解放される                      |
+| disk   | ディスクを使う。ルートの空き 10000MB 以上が必要。ビルド後に削除される                                  |
+| auto   | RAM 15000MB 以上かつ tmpfs をマウントできれば tmpfs、それ以外は disk                                   |
 
+- RAM 16GB 相当での確認：tmpfs（11GB）で Vite のビルドを行うと、RAM 12GB では残りが約 1GB しかなくページ回収が続いて停止した（PSI の `full avg300` が約 30%、CPU は sys 100%）。このため tmpfs は 15000MB 以上に限る。
+- Electron のバイナリは `ELECTRON_SKIP_BINARY_DOWNLOAD=1` で取得しない（API・UI のビルドには不要）。
 - tmpfs のマウントには LXC の権限が必要。マウントできない場合は auto なら disk にフォールバックし、tmpfs 指定ならエラーにする。
-- 前回の中断で tmpfs が残っていても再実行できる。
+- 前回の中断で tmpfs が残っていても再実行できる（開始時に作業領域を解除して作り直す）。
+- 停止したビルドが残る場合は、`pgrep -fa 'ri-build|vite build'` で確認し、`umount /opt/ytdlpserver/ri-build` で tmpfs を解除する。
 
 ### 動作確認
 
