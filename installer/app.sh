@@ -13,6 +13,9 @@ PLAYWRIGHT_DIR="$DIR/browsers"
 RI_TMPFS_MIN_MB=15000
 RI_TMPFS_SIZE=11000m
 RI_DISK_MIN_MB=10000
+# Redis のデータの退避先と、残す世代数（STATE_DIR は uninstall --purge で削除される）
+REDIS_BACKUP_DIR="$STATE_DIR/redis-backup"
+REDIS_BACKUP_KEEP=5
 
 mem_mb() { awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo; }
 free_mb() { df -Pm "$1" | awk 'NR==2 {print $4}'; }
@@ -40,7 +43,8 @@ app_check() {
   hs_expect_one_of REDIS_UI "$(config_value REDIS_UI)" insight commander
   hs_expect_one_of RI_BUILD_STORAGE "$(config_value RI_BUILD_STORAGE)" tmpfs disk auto
   case "$(config_value REDIS_INSIGHT_VERSION)" in ''|*[!0-9A-Za-z._-]*) die "REDIS_INSIGHT_VERSION が不正です: $(config_value REDIS_INSIGHT_VERSION)" ;; esac
-  for _k in WITH_BROWSER WITH_NGINX WITH_CLOUDFLARED WITH_REDIS_UI; do
+  hs_expect_int SERVICE_UID "$(config_value SERVICE_UID)" 100
+  for _k in WITH_BROWSER WITH_NGINX WITH_CLOUDFLARED WITH_REDIS_UI RUN_AS_ROOT; do
     hs_expect_bool "$_k" "$(config_value "$_k")"
   done
   _dl=$(config_value DOWNLOAD_DIR)
@@ -104,12 +108,62 @@ setup_pot() {
   [ -f "$_pot/server/build/main.js" ] || die "pot-provider のビルドに失敗しました"
 }
 
+# 各サービスの実行ユーザー: RUN_AS_ROOT=1 なら root、既定は専用ユーザー（$APP）
+resolve_svc_user() {
+  if [ "$(config_value RUN_AS_ROOT)" = 1 ]; then SVC_USER=root; else SVC_USER=$APP; fi
+}
+
+# 専用ユーザーがなければ、SERVICE_UID で作成する（あればそのまま使う）
+ensure_svc_user() {
+  [ "$SVC_USER" != root ] || return 0
+  id "$SVC_USER" >/dev/null 2>&1 && return 0
+  _uid=$(config_value SERVICE_UID)
+  log "専用ユーザーを作成: $SVC_USER（uid/gid $_uid）"
+  getent group "$SVC_USER" >/dev/null || groupadd --system --gid "$_uid" "$SVC_USER" \
+    || die "グループを作成できません: $SVC_USER（gid $_uid が使われていないか確認してください）"
+  useradd --system --uid "$_uid" --gid "$SVC_USER" --no-create-home --home-dir "$DATA_DIR" \
+    --shell /usr/sbin/nologin "$SVC_USER" || die "ユーザーを作成できません: $SVC_USER（uid $_uid が使われていないか確認してください）"
+}
+
 setup_dirs() {
-  hs_user "$SVC_USER"
+  ensure_svc_user
   hs_dir "$DATA_DIR" "$SVC_USER" 750
   hs_dir "$DOWNLOAD_DIR" "$SVC_USER"
   hs_dir "$COOKIE_DIR" "$SVC_USER" 700
   chown -R "$SVC_USER:$SVC_USER" "$DATA_DIR" "$COOKIE_DIR"
+}
+
+# Redis の設定値を返す。起動中なら CONFIG GET、なければ redis.conf から読む
+redis_config_value() {
+  _rv=$(redis-cli -h 127.0.0.1 CONFIG GET "$1" 2>/dev/null | sed -n 2p || true)
+  [ -n "$_rv" ] || _rv=$(sed -n "s/^$1 //p" /etc/redis/redis.conf 2>/dev/null | tail -n 1 || true)
+  printf '%s' "$_rv"
+}
+
+# 更新の前に Redis のデータを退避する（dump.rdb と AOF。直近 REDIS_BACKUP_KEEP 世代を残す）
+# 退避できない・検証できない場合は中止する（データを上書きしてから失うのを防ぐため）
+backup_redis() {
+  _rdb_dir=$(redis_config_value dir); _rdb_dir=${_rdb_dir:-/var/lib/redis}
+  _rdb_file=$(redis_config_value dbfilename); _rdb_file=${_rdb_file:-dump.rdb}
+  if redis-cli -h 127.0.0.1 ping >/dev/null 2>&1; then
+    redis-cli -h 127.0.0.1 SAVE >/dev/null || die "Redis の SAVE に失敗したため中止します（退避できないデータを上書きしないため）"
+  fi
+  [ -f "$_rdb_dir/$_rdb_file" ] || { log "Redis のデータファイルがないため、退避を省略します（初回導入）"; return 0; }
+  _ts=$(date -u +%Y%m%dT%H%M%SZ)
+  install -d -m 700 "$REDIS_BACKUP_DIR"
+  _dst="$REDIS_BACKUP_DIR/redis-$_ts.rdb"
+  cp "$_rdb_dir/$_rdb_file" "$_dst" || die "Redis のデータを退避できません: $_dst"
+  cmp -s "$_rdb_dir/$_rdb_file" "$_dst" || die "Redis の退避データが元のデータと一致しません: $_dst"
+  chmod 600 "$_dst"
+  if [ -d "$_rdb_dir/appendonlydir" ]; then
+    tar -C "$_rdb_dir" -czf "$REDIS_BACKUP_DIR/redis-$_ts-aof.tar.gz" appendonlydir || die "Redis の AOF を退避できません"
+    chmod 600 "$REDIS_BACKUP_DIR/redis-$_ts-aof.tar.gz"
+  fi
+  # 直近 REDIS_BACKUP_KEEP 世代より古いものを削除する
+  ls -1t "$REDIS_BACKUP_DIR"/redis-*.rdb 2>/dev/null | tail -n +"$((REDIS_BACKUP_KEEP + 1))" | while IFS= read -r _old; do
+    rm -f "$_old" "${_old%.rdb}-aof.tar.gz"
+  done
+  log "Redis のデータを退避しました: $_dst"
 }
 
 setup_redis() {
@@ -280,7 +334,9 @@ app_install() {
   check_env
   # shellcheck source=/dev/null
   . "$CONF_FILE"
+  resolve_svc_user
   install_packages
+  backup_redis
   setup_dirs
   setup_python
   setup_ytdlp

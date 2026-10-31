@@ -221,6 +221,8 @@ curl -fsSL https://github.com/nekono-dev/ytdlpServer/releases/latest/download/in
 | REDIS_INSIGHT_VERSION | `3.8.0` | ビルドする Redis Insight のタグ |
 | RI_BUILD_STORAGE | `auto` | ビルド先（tmpfs・disk・auto） |
 | REDIS_UI_HOST | `0.0.0.0` | Web UI の待ち受けアドレス |
+| RUN_AS_ROOT | `0` | 1 で各サービスを root で動かす。0（既定）は専用ユーザー `ytdlpserver` で動かす |
+| SERVICE_UID | `900` | 専用ユーザー `ytdlpserver` の UID（作成時のみ使う）。動画の保存先が NAS の場合は、マウントの uid/gid をこの値に合わせる |
 
 例: HTTPS を追加し、Redis の Web UI は軽量な commander にする。
 
@@ -308,6 +310,9 @@ ytdlpserver-ctl status
 - `ytdlpserver-ctl update` は、導入中のブランチ・タグの最新を取得して再適用する。`install.sh` を使った `update` も同じ動作になる（`install.sh` のコミットへは戻さない）。
 - 開発中のブランチを試すときは、`install.sh` に `--ref <ブランチ名>` を付けて導入する（例: `curl -fsSL …/install.sh | sudo sh -s -- install --ref dev/v1.3`）。
 - `update` では、設定スキーマに新しく増えたキーが既定値で追記される。既存の値は変わらない。
+- `install` と `update` の前に、Redis のデータ（`dump.rdb`、AOF があればその一式）を `/var/lib/ytdlpserver-installer/redis-backup/` へ退避する。ファイル名は `redis-<UTC時刻>.rdb` で、直近 5 世代だけ残す。退避に失敗した場合は、データを上書きする前に中止する。
+  - 復元する場合は、`sudo systemctl stop ytdlpserver-api ytdlpserver-dispatcher redis-server` の後で、退避ファイルを `/var/lib/redis/dump.rdb` へ `redis:redis` の所有で置き、`sudo systemctl start redis-server` で起動する。
+  - `uninstall --purge` を付けると、この退避先も削除される。
 
 状態を見る・ログを見る・再起動する。
 

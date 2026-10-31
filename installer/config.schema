@@ -30,3 +30,5 @@ REDIS_UI|insight|optional|insight または commander
 REDIS_INSIGHT_VERSION|3.8.0|optional|ビルドする Redis Insight のタグ
 RI_BUILD_STORAGE|auto|optional|ビルド先（tmpfs・disk・auto）
 REDIS_UI_HOST|0.0.0.0|optional|Web UI の待ち受けアドレス
+RUN_AS_ROOT|0|optional|1 で各サービスを root で動かす（0 は専用ユーザー ytdlpserver で動かす）
+SERVICE_UID|900|optional|専用ユーザー ytdlpserver の UID（新規作成時のみ使う。NAS の uid/gid の対応に使う）

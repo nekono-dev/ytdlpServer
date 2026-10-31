@@ -68,14 +68,19 @@ main.sh は設定ファイルへ書き込む前に `app_check` を呼び、書�
 | --- | ------------------- | ----------------------------------------------------------------------------------- |
 | 1   | `check_env`         | Ubuntu 24.04 であること、systemd で動いていること、メモリが 1024MB 以上、ルートの総容量が 5GB（10^9 バイト換算）以上かを確認する |
 | 2   | `install_packages`  | apt で依存（未導入のものだけ）と NodeSource の Node.js 24 を導入する                |
-| 3   | `setup_dirs`        | 専用ユーザーを作り、データ・動画・cookie の保存先をそのユーザーの所有にする         |
-| 4   | `setup_python`      | `$DIR/venv` を作り、各サーバの requirements を導入する                              |
-| 5   | `setup_ytdlp`       | updater を実行して yt-dlp を `$DIR/ytdlp` へ導入し、専用ユーザーの所有にする        |
-| 6   | `setup_pot`         | bgutil と同じ版の pot-provider を `$DIR/pot-provider` へ取得してビルドする          |
-| 7   | `setup_redis`       | redis-server を 127.0.0.1 限定にする                                                |
-| 8   | `start_core`        | redis-server を有効化し、pot・api・dispatcher のユニットを生成して再起動する        |
-| 9   | `converge_optional` | 任意コンポーネントを設定に合わせて導入する                                          |
-| 10  | `hs_prune`          | この実行で生成しなかった ytdlpserver のユニットを停止・無効化・削除する             |
+| 3   | `backup_redis`      | 更新の前に Redis のデータを退避する（SAVE・コピー・cmp で照合・直近 5 世代を残す）。初回は省略する |
+| 4   | `setup_dirs`        | 専用ユーザーを作り、データ・動画・cookie の保存先をそのユーザーの所有にする         |
+| 5   | `setup_python`      | `$DIR/venv` を作り、各サーバの requirements を導入する                              |
+| 6   | `setup_ytdlp`       | updater を実行して yt-dlp を `$DIR/ytdlp` へ導入し、専用ユーザーの所有にする        |
+| 7   | `setup_pot`         | bgutil と同じ版の pot-provider を `$DIR/pot-provider` へ取得してビルドする          |
+| 8   | `setup_redis`       | redis-server を 127.0.0.1 限定にする                                                |
+| 9   | `start_core`        | redis-server を有効化し、pot・api・dispatcher のユニットを生成して再起動する        |
+| 10  | `converge_optional` | 任意コンポーネントを設定に合わせて導入する                                          |
+| 11  | `hs_prune`          | この実行で生成しなかった ytdlpserver のユニットを停止・無効化・削除する             |
+
+実行ユーザー（`resolve_svc_user`・`ensure_svc_user`）:
+- `RUN_AS_ROOT=0`（既定）は専用ユーザー `ytdlpserver` で動かす。ユーザーがなければ `SERVICE_UID`（既定 900）の UID/GID で作成する。既にあればそのまま使う。
+- `RUN_AS_ROOT=1` は root で動かす。専用ユーザーは作らない。
 
 ```sh
 . "$SCRIPT_DIR/host-service.sh"   # app.sh の先頭で共通処理を読み込む
@@ -266,5 +271,6 @@ exec sh "$DIR/installer/main.sh" "$SUB" --ref "$REF" --commit "$COMMIT" --repo-u
 | コアコンポーネントの導入失敗                | エラー終了し、再実行で続きから導入できる  |
 | 任意コンポーネントの起動失敗                | 警告を表示して続行し、ログの場所を示す    |
 | Redis Insight のビルド失敗                  | 警告を表示して redis-commander で継続する |
+| Redis のデータの退避に失敗（SAVE・コピー・照合） | データを上書きする前にエラー終了する |
 | cloudflared のダイジェストを取得できない    | 警告を表示して検証を省略する              |
 | update 時に取得先へ未コミットの変更がある   | 何も変更せずエラー終了する                |

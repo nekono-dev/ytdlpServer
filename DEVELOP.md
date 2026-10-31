@@ -394,12 +394,23 @@ cookie ファイル本体は Redis に置かない（`COOKIE_DIR/<name>.txt`）�
   venv・pot-provider・ytdlp・redisinsight・browsers・bin は、その兄弟ディレクトリとして展開する（いずれも `.gitignore` 済み）。`uninstall` は取得先ごと削除する。
 - cookie の保存先は `/var/lib/ytdlpserver/cookies`、導入メタ情報は `/var/lib/ytdlpserver-installer/state`。`uninstall` では残し、`--purge` で削除する。動画の保存先は `--purge` でも削除しない（そのため `DOWNLOAD_DIR` は `/var/lib/ytdlpserver` の配下にできない）。
 - yt-dlp は `$YTDLPSERVER_DIR/ytdlp` へ GitHub Releases から導入し、`current` を更新する（glibc は `yt-dlp_linux`、musl は `yt-dlp_musllinux`）。bgutil プラグインは `/etc/yt-dlp/plugins/bgutil` に配置する。
-- Redis（`redis-server`）/ pot-provider / API / dispatcher は systemd サービスとして登録する。ytdlpServer のサービスは専用ユーザー `ytdlpserver` で動き、動画・cookie・データの保存先と `$YTDLPSERVER_DIR/ytdlp` はそのユーザーが所有する。ユニットは `installer/host-service.sh` の `hs_service` が生成する。pot-provider と Redis は `127.0.0.1` に限定する。worker は dispatcher の子プロセスとして起動される。
+- Redis（`redis-server`）/ pot-provider / API / dispatcher は systemd サービスとして登録する。ytdlpServer のサービスは既定では専用ユーザー `ytdlpserver` で動き（`RUN_AS_ROOT=1` で root に切り替え。専用ユーザーは `SERVICE_UID`（既定 900）の UID/GID で作成する）、動画・cookie・データの保存先と `$YTDLPSERVER_DIR/ytdlp` はそのユーザーが所有する。ユニットは `installer/host-service.sh` の `hs_service` が生成する。pot-provider と Redis は `127.0.0.1` に限定する。worker は dispatcher の子プロセスとして起動される。
 - 最小要件は、メモリ 1024MB 以上とルートのファイルシステムの総容量 5GB 以上（`check_env` が導入前に検査する）。
 - Node.js は apt の版（18）では足りないため、NodeSource の Node.js 24 を導入する（pot-provider は 22 以上、Redis Insight は 24 以上が必要）。
 - 任意で nginx（HTTPS）、cloudflared、Redis の Web UI、ログイン用ブラウザを導入する。`install`/`update` のたびに設定値（`WITH_*`）へ収束し、`0` にすると停止・撤去する。
 - ログイン用ブラウザ（`ytdlpserver-browser`）の Chromium は、Ubuntu の `chromium` が snap で LXC では使えないため、Playwright の Chromium を `$YTDLPSERVER_DIR/browsers` に導入し、`$YTDLPSERVER_DIR/bin/chromium` から参照する。
   メモリ・ディスクが閾値（メモリ 2048MB / 空き 1024MB）未満なら、`WITH_BROWSER` が明示されていない限り導入しない。
+
+### Redis データの退避（`backup_redis`）
+
+- `app_install`（`install`・`update` の両方）の先頭で、パッケージ導入の直後に実行する。
+- 起動中の Redis には `SAVE` を実行して最新の状態を書き出す。`SAVE` が失敗したら中止する。
+- 設定値（`dir`・`dbfilename`）は `CONFIG GET` から取得し、起動していなければ `/etc/redis/redis.conf` から読む。
+- 退避先は `$STATE_DIR/redis-backup/`（既定は `/var/lib/ytdlpserver-installer/redis-backup/`）。所有は root、権限は 600。
+- コピーは `cmp` で元のファイルと照合する。一致しなければ中止する。AOF（`appendonlydir`）があれば `tar.gz` にまとめる。
+- 世代数は `REDIS_BACKUP_KEEP`（既定 5）。古いものから削除する。
+- 初回導入では dump.rdb がないため、退避は省略して続行する。
+- 検証結果：本番（RAM 16GB）で 7 回実行し、直近 5 世代が残り、最新の退避ファイルが `dump.rdb` と一致することを確認した。
 
 ### cloudflared の版数・整合性検証
 
@@ -489,10 +500,12 @@ CI は `secrets.SPEC_LINT_TOKEN`（`read:packages` 権限のトークン）で `
 標準の `unittest` で、Redis やネットワークは不要（Redis は疑似実装、yt-dlp は差し替え）。
 
 ```sh
-pip install -r apiServer/requirements.txt -r workerServer/requirements.txt -r browserServer/requirements.txt
-python3 -m unittest discover -s tests -v                 # 単体テスト
+python3 -m venv .venv && .venv/bin/pip install -r apiServer/requirements.txt -r workerServer/requirements.txt -r browserServer/requirements.txt
+.venv/bin/python -m unittest discover -s tests -v       # 単体テスト（.venv の Python を使う）
 npm ci && npx playwright install --with-deps chromium
 npm test                                                  # 仕様との対応（単体テストを AC のタグつきで実行）と、インストーラの静的検査
+# npm test は .venv があればその Python を、なければ python3 を使う。別の Python を使うなら PYTHON=<path> npm test
+# 依存が無い場合は、個々のテストの失敗ではなく、不足しているモジュールと対処法を 1 件で示す
 npm run test:e2e                                          # 操作ページの E2E（偽のブラウザで制御 API を起動する）
 ```
 

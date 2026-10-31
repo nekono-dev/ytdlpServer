@@ -34,7 +34,7 @@ Ubuntu 24.04 のベアメタルおよび LXC コンテナへ、ytdlpServer の�
 - FR-7: uninstall は、アプリ本体・サービス・常設コマンド・取得先を削除し、設定・cookie・Redis のデータ・動画を残す。
 - FR-8: uninstall に purge を付けると、設定・cookie・Redis のデータ・導入メタ情報・専用ユーザーを削除し、動画は削除しない。
 - FR-9: status は、導入先・参照・コミット・取得元・更新日時を表示し、未導入のときは未導入と表示する。
-- FR-10: Redis と pot-provider は 127.0.0.1 のみで待ち受け、ytdlpServer の各サービスは root ではなく専用ユーザー ytdlpserver で動き、起動順の依存を持ち、異常終了後に自動で再起動する。
+- FR-10: Redis と pot-provider は 127.0.0.1 のみで待ち受け、ytdlpServer の各サービスは既定では root ではなく専用ユーザー ytdlpserver で動き（RUN_AS_ROOT=1 で root に切り替えられる）、起動順の依存を持ち、異常終了後に自動で再起動する。
 - FR-11: ブランチ push では頒布物をアーティファクトへ、タグ push では Release へ公開し、手動実行でも同じ処理を行う。
 - FR-12: 頒布物は埋め込まれたコミットのソースだけを取得し、取得結果がそのコミットと一致しなければ実行を中止する。
 
@@ -65,4 +65,4 @@ Ubuntu 24.04 のベアメタルおよび LXC コンテナへ、ytdlpServer の�
 - AC-16 (NFR-2): 導入後の設定ファイルの権限は 640 でグループが ytdlpserver、cookie の保存先の権限は 700 で所有者が ytdlpserver である。
 - AC-17 (NFR-3): shellcheck を警告レベルで実行すると、指摘が 0 件である。
 - AC-18 (NFR-4): メモリ 4096MB の空の Ubuntu 24.04 コンテナで、標準構成の install が900秒以内に完了する。
-- AC-19 (FR-10): 導入後の API・dispatcher・pot-provider のプロセスは ytdlpserver ユーザーで動き、動画の保存先の所有者は ytdlpserver である。
+- AC-19 (FR-10): 既定の設定（RUN_AS_ROOT=0）で導入後の API・dispatcher・pot-provider のプロセスは ytdlpserver ユーザーで動き、動画の保存先の所有者は ytdlpserver である。
