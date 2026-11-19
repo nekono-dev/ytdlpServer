@@ -58,7 +58,6 @@ ytdlpServer の開発者向けドキュメント。利用者向けの導入・�
 | [tests/](tests/)                                                           | 単体テスト（標準 `unittest`）、仕様との対応（`spec-trace/`）、E2E（`e2e/`） |
 | [specs/](specs/)                                                           | 要件・設計・タスク（仕様駆動開発）。機能責務ごとに `api-server/` `browser-server/` `cookie-store/` `dispatcher/` `worker-runtime/` `ytdlp-updater/` `installer/` |
 | [docs/architecture.md](docs/architecture.md) | 全体のアーキテクチャ設計書（設計済みの spec が3件以上のとき必須。`spec-lint` が検査する） |
-| [.claude/settings.json](.claude/settings.json) | 仕様駆動開発のスキル（プラグイン `spec-driven-development@nekono-dev`）を有効にする設定 |
 | [package.json](package.json)                                               | `lint:spec`（`spec-lint`）・`test`・`test:e2e` のスクリプトと、Prettier・Playwright |
 | `*/yt-dlp.conf`                                                            | イメージ内の `/etc/yt-dlp.conf` になる yt-dlp 共通設定            |
 | [nginx/](nginx/)                                                           | HTTPS 構成用の nginx イメージ                                     |
@@ -476,7 +475,9 @@ INSTALLER_E2E_RESULT=/tmp/result.txt node --test tests/installer/*.test.mjs
 
 ## 仕様駆動開発
 
-機能の追加・修正は、`specs/<コンポーネント>/` の `requirements.md`・`design.md`・`tasks.md` を整備してから行う。進め方と規則はスキル `spec-driven-development`（プラグイン。[.claude/settings.json](.claude/settings.json) で有効になる）に従い、合否は検査コマンド `spec-lint`（`@nekono-dev/spec-lint`）だけで判定する。配布元は <https://github.com/nekono-dev/spec-driven-development> である。
+機能の追加・修正は、`specs/<コンポーネント>/` の `requirements.md`・`design.md`・`tasks.md` を整備してから行う。合否は検査コマンド `spec-lint`（`@nekono-dev/spec-lint`）だけで判定し、規則は `spec-lint --rules` で確かめる。
+
+スキル `spec-driven-development`（プラグイン）は 2026-11-18 に廃止し、配布元 <https://github.com/nekono-dev/spec-driven-development> はアーカイブした（`spec-lint` は GitHub Packages に残る）。今後は cc-sdd（Kiro 方式の仕様駆動開発）へ移行し、導入は [cc-sdd-bootstrap](https://github.com/nekono-dev/cc-sdd-bootstrap) で行う。cc-sdd-bootstrap の導入コマンドができるまでは、この節の手順を続ける。
 
 ```sh
 # 初回のみ。GitHub Packages の認証（read:packages 権限のトークン）を ~/.npmrc に書いてから入れる
@@ -484,7 +485,6 @@ npm install -g @nekono-dev/spec-lint       # 同じコマンドで最新へ更�
 spec-lint                                  # 全 spec と docs/architecture.md を検査する（整形の Prettier を含む）
 spec-lint specs/api-server                 # 1つだけ検査する
 spec-lint --format                         # 整形の指摘を直す
-claude plugin update spec-driven-development@nekono-dev   # スキルの更新（反映は再起動後）
 ```
 
 CI は `secrets.SPEC_LINT_TOKEN`（`read:packages` 権限のトークン）で `@nekono-dev/spec-lint@1` を実行する。
